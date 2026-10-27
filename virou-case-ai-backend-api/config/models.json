@@ -1,0 +1,39 @@
+{
+  "version": "2026-10-v1",
+  "models": [
+    {
+      "provider": "openai",
+      "model": "gpt-6-luna",
+      "version": "openai-luna-2026-10-26",
+      "enabled": false,
+      "verified_account": false,
+      "input_usd_per_million": "0.10",
+      "cached_usd_per_million": "0.01",
+      "output_usd_per_million": "0.50",
+      "fx_brl_per_usd": "0",
+      "fx_source": "",
+      "effective_at": "2026-10-26T00:00:00+00:00",
+      "valid_until": "2026-10-27T00:00:00+00:00",
+      "max_output_tokens": 16000,
+      "evidence": "",
+      "pricing_source": "https://developers.openai.com/api/docs/pricing"
+    },
+    {
+      "provider": "gemini",
+      "model": "gemini-3.5-flash-lite",
+      "version": "gemini-flash-lite-2026-10-26",
+      "enabled": false,
+      "verified_account": false,
+      "input_usd_per_million": "0.30",
+      "cached_usd_per_million": "0.03",
+      "output_usd_per_million": "2.50",
+      "fx_brl_per_usd": "0",
+      "fx_source": "",
+      "effective_at": "2026-10-26T00:00:00+00:00",
+      "valid_until": "2026-10-27T00:00:00+00:00",
+      "max_output_tokens": 16000,
+      "evidence": "",
+      "pricing_source": "https://ai.google.dev/gemini-api/docs/pricing"
+    }
+  ]
+}

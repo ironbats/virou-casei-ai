@@ -1,0 +1,244 @@
+name: ${COMPOSE_PROJECT_NAME:-viracaseai}
+x-runtime-environment: &runtime-environment
+  VIRA_CONTAINERIZED: "true"
+  VIRA_DB_HOST: postgres
+  POSTGRES_DB: ${POSTGRES_DB:-viracase}
+  APP_DB_PASSWORD: ${APP_DB_PASSWORD:?Configure APP_DB_PASSWORD no .env}
+  VIRA_PUBLIC_ORIGIN: ${VIRA_PUBLIC_ORIGIN:-http://127.0.0.1:5173,http://localhost:5173}
+  VIRA_ADMIN_ORIGIN: ${VIRA_ADMIN_ORIGIN:-http://127.0.0.1:5174,http://localhost:5174}
+  VIRA_PUBLIC_HOSTS: ${VIRA_PUBLIC_HOSTS:-127.0.0.1,localhost}
+  VIRA_COOKIE_SECURE: ${VIRA_COOKIE_SECURE:-false}
+  VIRA_CREDENTIAL_KEY_PATH: /app/var/secrets/credentials.key
+  VIRA_SOURCE_ROOT: /app/var/sources
+  VIRA_CONTENT_ROOT: /app/content
+  VIRA_CATALOG_PATH: /app/config/models.json
+  VIRA_OPENAI_API_KEY: ${VIRA_OPENAI_API_KEY:-}
+  VIRA_GEMINI_API_KEY: ${VIRA_GEMINI_API_KEY:-}
+  VIRA_PROVIDER_TIMEOUT: ${VIRA_PROVIDER_TIMEOUT:-180}
+  VIRA_SESSION_HOURS: ${VIRA_SESSION_HOURS:-12}
+  VIRA_LIFECYCLE_ENABLED: ${VIRA_LIFECYCLE_ENABLED:-true}
+  VIRA_RESTORE_HOLD: ${VIRA_RESTORE_HOLD:-false}
+x-backend: &backend
+  build: .
+  image: viroucaseai-backend:2.0.0.19
+  user: "${VIRA_RUNTIME_UID:-10001}:${VIRA_RUNTIME_GID:-10001}"
+  init: true
+  read_only: true
+  tmpfs:
+    - /tmp:rw,noexec,nosuid,size=64m,mode=1777
+  security_opt:
+    - no-new-privileges:true
+  cap_drop:
+    - ALL
+  environment: *runtime-environment
+  stop_grace_period: 210s
+services:
+  postgres:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-viracase}
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Configure POSTGRES_PASSWORD no .env}
+      APP_DB_PASSWORD: ${APP_DB_PASSWORD:?Configure APP_DB_PASSWORD no .env}
+    ports:
+      - "127.0.0.1:${POSTGRES_PORT:-55432}:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - ./script/init-db.sh:/docker-entrypoint-initdb.d/01-app-role.sh:ro
+    networks:
+      - database
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d $${POSTGRES_DB}"]
+      interval: 3s
+      timeout: 3s
+      retries: 40
+    security_opt:
+      - no-new-privileges:true
+  storage-init:
+    <<: *backend
+    user: "0:0"
+    init: false
+    network_mode: none
+    restart: "no"
+    cap_add:
+      - CHOWN
+      - FOWNER
+      - DAC_OVERRIDE
+    environment:
+      VIRA_RUNTIME_UID: ${VIRA_RUNTIME_UID:-10001}
+      VIRA_RUNTIME_GID: ${VIRA_RUNTIME_GID:-10001}
+    command: ["python", "script/init-storage.py"]
+    volumes:
+      - type: bind
+        source: ./var/secrets
+        target: /app/var/secrets
+      - type: bind
+        source: ${VIRA_SOURCE_ROOT:-./var/sources}
+        target: /app/var/sources
+    healthcheck:
+      disable: true
+  initialize:
+    <<: *backend
+    restart: "no"
+    environment:
+      <<: *runtime-environment
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Configure POSTGRES_PASSWORD no .env}
+      VIRA_ADMIN_LOGIN: ${VIRA_ADMIN_LOGIN:-}
+      VIRA_ADMIN_NAME: ${VIRA_ADMIN_NAME:-}
+      VIRA_ADMIN_PASSWORD: ${VIRA_ADMIN_PASSWORD:-}
+      VIRA_OPENAI_API_KEY: ""
+      VIRA_GEMINI_API_KEY: ""
+    command: ["python", "script/container-initialize.py"]
+    volumes:
+      - type: bind
+        source: ./var/secrets
+        target: /app/var/secrets
+    networks:
+      - database
+    depends_on:
+      storage-init:
+        condition: service_completed_successfully
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      disable: true
+  public-api:
+    <<: *backend
+    restart: unless-stopped
+    command: ["uvicorn", "viracase.interfaces.public:app", "--host", "0.0.0.0", "--port", "8000", "--no-proxy-headers"]
+    ports:
+      - "127.0.0.1:${VIRA_PUBLIC_API_PORT:-8000}:8000"
+    volumes:
+      - type: bind
+        source: ./var/secrets
+        target: /app/var/secrets
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ${VIRA_SOURCE_ROOT:-./var/sources}
+        target: /app/var/sources
+      - type: bind
+        source: ${VIRA_CATALOG_PATH:-./config/models.json}
+        target: /app/config/models.json
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ${VIRA_CONTENT_ROOT:-./content}
+        target: /app/content
+        read_only: true
+        bind:
+          create_host_path: false
+    networks:
+      database:
+      public:
+        aliases: [viroucaseai-public-api]
+    depends_on:
+      postgres:
+        condition: service_healthy
+      storage-init:
+        condition: service_completed_successfully
+      initialize:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health/ready',timeout=2)"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+      start_period: 15s
+  admin-api:
+    <<: *backend
+    restart: unless-stopped
+    command: ["uvicorn", "viracase.interfaces.admin:app", "--host", "0.0.0.0", "--port", "8001", "--no-proxy-headers"]
+    ports:
+      - "127.0.0.1:${VIRA_ADMIN_API_PORT:-8001}:8001"
+    volumes:
+      - type: bind
+        source: ./var/secrets
+        target: /app/var/secrets
+        read_only: true
+      - type: bind
+        source: ${VIRA_SOURCE_ROOT:-./var/sources}
+        target: /app/var/sources
+      - type: bind
+        source: ${VIRA_CATALOG_PATH:-./config/models.json}
+        target: /app/config/models.json
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ${VIRA_CONTENT_ROOT:-./content}
+        target: /app/content
+        read_only: true
+        bind:
+          create_host_path: false
+    networks:
+      database:
+      outbound:
+      admin:
+        aliases: [viroucaseai-admin-api]
+    depends_on:
+      postgres:
+        condition: service_healthy
+      storage-init:
+        condition: service_completed_successfully
+      initialize:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8001/health/ready',timeout=2)"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+      start_period: 15s
+  worker:
+    <<: *backend
+    restart: unless-stopped
+    command: ["python", "-m", "viracase.infrastructure.worker"]
+    volumes:
+      - type: bind
+        source: ./var/secrets
+        target: /app/var/secrets
+        read_only: true
+      - type: bind
+        source: ${VIRA_SOURCE_ROOT:-./var/sources}
+        target: /app/var/sources
+      - type: bind
+        source: ${VIRA_CATALOG_PATH:-./config/models.json}
+        target: /app/config/models.json
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ${VIRA_CONTENT_ROOT:-./content}
+        target: /app/content
+        read_only: true
+        bind:
+          create_host_path: false
+    networks:
+      - database
+      - outbound
+    depends_on:
+      postgres:
+        condition: service_healthy
+      storage-init:
+        condition: service_completed_successfully
+      initialize:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD", "python", "script/check-worker.py"]
+      interval: 15s
+      timeout: 3s
+      retries: 3
+      start_period: 30s
+volumes:
+  postgres-data:
+networks:
+  database:
+    internal: true
+  public:
+    name: viroucaseai-public
+  admin:
+    name: viroucaseai-admin
+  outbound:

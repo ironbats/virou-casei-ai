@@ -1,0 +1,34 @@
+{
+  "slug": "criterios-aceite",
+  "title": "Critérios de aceite",
+  "category": "planning",
+  "objective": "Definir uma prova objetiva para cada comportamento.",
+  "concept": "Um critério de aceite liga uma condição inicial a uma ação e a um resultado observável. Evite critérios subjetivos como ficar moderno ou funcionar bem.",
+  "when_to_use": "Ao revisar uma especificação ou preparar a validação de uma entrega.",
+  "steps": [
+    "Escolha uma regra e descreva a condição inicial sem ambiguidade.",
+    "Inclua sucesso, erro, permissão negada e repetição da mesma ação.",
+    "Defina onde a evidência será registrada e quem verificará o resultado."
+  ],
+  "template": "Regra: [comportamento]\nDado: [estado inicial e ator]\nQuando: [uma ação concreta]\nEntão: [resultado observável]\nE: [efeitos que devem ser preservados]\nCaso negativo: [entrada inválida ou ator sem permissão]\nConcorrência: [duas ações simultâneas]\nEvidência exigida: [resposta, registro ou tela]\nCritério de falha: [resultado que reprova a entrega]",
+  "security_summary": "Inclua acesso negado e tentativas de consultar dados de outro usuário.",
+  "security_notes": [
+    "Inclua acesso negado e tentativas de consultar dados de outro usuário.",
+    "Use dados sintéticos nos exemplos e revise a saída antes de aplicá-la a um sistema real."
+  ],
+  "checklist": [
+    "A entrada e o resultado de critérios de aceite estão definidos.",
+    "O template foi preenchido com dados pertinentes e sem segredos.",
+    "Os casos de falha e as evidências foram revisados."
+  ],
+  "application": "Escolha uma mudança pequena do seu projeto. Preencha o template, execute os passos e compare a evidência obtida com o objetivo: definir uma prova objetiva para cada comportamento.",
+  "limitations": "Este guia orienta o trabalho e não executa ferramentas, garante segurança ou comprova competência. Registre o que não foi testado e procure a documentação da tecnologia antes de decisões específicas.",
+  "sources": [
+    {
+      "title": "Cucumber Gherkin",
+      "url": "https://cucumber.io/docs/gherkin/reference/"
+    }
+  ],
+  "version": "1.0.0",
+  "reviewed_at": "2026-10-26"
+}

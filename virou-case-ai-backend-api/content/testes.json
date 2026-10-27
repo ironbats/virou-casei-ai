@@ -1,0 +1,34 @@
+{
+  "slug": "testes",
+  "title": "Testes que provam comportamento",
+  "category": "quality",
+  "objective": "Validar o fluxo real e seus casos negativos.",
+  "concept": "Testes úteis verificam o que o usuário e o sistema precisam observar. Repetir a implementação em uma asserção pode produzir testes verdes sem proteger o comportamento.",
+  "when_to_use": "Ao implementar uma regra, corrigir um defeito ou preparar uma liberação.",
+  "steps": [
+    "Escolha os riscos que o teste deve detectar.",
+    "Prepare dados sintéticos e estado inicial isolado.",
+    "Execute a ação, confira os efeitos e prove que o caso negativo é recusado."
+  ],
+  "template": "Regra testada: [invariante]\nCenário: [sucesso, erro ou concorrência]\nEstado inicial: [dados sintéticos]\nAtor: [identidade e permissões]\nAção: [entrada concreta]\nResultado esperado: [resposta e estado persistido]\nEfeitos proibidos: [o que não deve acontecer]\nComando: [como executar]\nEvidência: [resultado real]\nLimitações: [dependências não exercitadas]",
+  "security_summary": "Teste isolamento em ambiente controlado e nunca use credenciais de produção nos fixtures.",
+  "security_notes": [
+    "Teste isolamento em ambiente controlado e nunca use credenciais de produção nos fixtures.",
+    "Use dados sintéticos nos exemplos e revise a saída antes de aplicá-la a um sistema real."
+  ],
+  "checklist": [
+    "A entrada e o resultado de testes que provam comportamento estão definidos.",
+    "O template foi preenchido com dados pertinentes e sem segredos.",
+    "Os casos de falha e as evidências foram revisados."
+  ],
+  "application": "Escolha uma mudança pequena do seu projeto. Preencha o template, execute os passos e compare a evidência obtida com o objetivo: validar o fluxo real e seus casos negativos.",
+  "limitations": "Este guia orienta o trabalho e não executa ferramentas, garante segurança ou comprova competência. Registre o que não foi testado e procure a documentação da tecnologia antes de decisões específicas.",
+  "sources": [
+    {
+      "title": "Testing Library",
+      "url": "https://testing-library.com/docs/guiding-principles/"
+    }
+  ],
+  "version": "1.0.0",
+  "reviewed_at": "2026-10-26"
+}

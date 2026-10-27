@@ -1,0 +1,34 @@
+{
+  "slug": "decomposicao",
+  "title": "Decomposição em entregas",
+  "category": "planning",
+  "objective": "Dividir trabalho em etapas que possam ser integradas e verificadas.",
+  "concept": "Uma etapa útil termina com um comportamento demonstrável. Dividir apenas por tela ou arquivo costuma esconder dependências e deixar a integração para o fim.",
+  "when_to_use": "Quando a mudança tem várias partes ou depende de serviços externos.",
+  "steps": [
+    "Liste os resultados do fluxo completo.",
+    "Ordene as dependências e identifique primeiro os riscos que podem inviabilizar a solução.",
+    "Defina prova de conclusão, recuperação e responsabilidade para cada etapa."
+  ],
+  "template": "Resultado final: [comportamento completo]\nEtapa: [nome]\nDependências: [dados, contratos e serviços]\nEntrada: [pré-condições]\nSaída: [comportamento entregue]\nInvariante: [regra preservada]\nRisco principal: [falha provável]\nAção externa: [recurso e autorização]\nValidação: [evidência real]\nRecuperação: [como interromper ou voltar com segurança]\nResponsável: [pessoa]\nPróxima etapa: [integração]",
+  "security_summary": "Separe mudanças reversíveis de exclusões, pagamentos e publicações que precisam de autorização própria.",
+  "security_notes": [
+    "Separe mudanças reversíveis de exclusões, pagamentos e publicações que precisam de autorização própria.",
+    "Use dados sintéticos nos exemplos e revise a saída antes de aplicá-la a um sistema real."
+  ],
+  "checklist": [
+    "A entrada e o resultado de decomposição em entregas estão definidos.",
+    "O template foi preenchido com dados pertinentes e sem segredos.",
+    "Os casos de falha e as evidências foram revisados."
+  ],
+  "application": "Escolha uma mudança pequena do seu projeto. Preencha o template, execute os passos e compare a evidência obtida com o objetivo: dividir trabalho em etapas que possam ser integradas e verificadas.",
+  "limitations": "Este guia orienta o trabalho e não executa ferramentas, garante segurança ou comprova competência. Registre o que não foi testado e procure a documentação da tecnologia antes de decisões específicas.",
+  "sources": [
+    {
+      "title": "Google SRE Workbook",
+      "url": "https://sre.google/workbook/implementing-slos/"
+    }
+  ],
+  "version": "1.0.0",
+  "reviewed_at": "2026-10-26"
+}

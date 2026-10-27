@@ -1,0 +1,34 @@
+{
+  "slug": "revisao",
+  "title": "Revisão de código com IA",
+  "category": "quality",
+  "objective": "Encontrar problemas concretos em relação ao contrato esperado.",
+  "concept": "Revisar é confrontar a mudança com requisitos e riscos. Uma opinião sobre estilo não tem a mesma prioridade de uma falha de autorização ou perda de dados.",
+  "when_to_use": "Antes de integrar uma alteração ou aceitar código gerado.",
+  "steps": [
+    "Leia a especificação e identifique contratos que não podem mudar.",
+    "Examine o diff e siga os caminhos de entrada até a persistência e a resposta.",
+    "Registre cada achado com localização, impacto e forma de reproduzir."
+  ],
+  "template": "Mudança: [objetivo]\nContrato esperado: [comportamento]\nArquivos: [lista]\nAchado: [descrição objetiva]\nLocalização: [arquivo e função]\nEvidência: [entrada e resultado observado]\nImpacto: [quem é afetado]\nSeveridade: [justificativa]\nCorreção proposta: [menor mudança adequada]\nTeste de regressão: [cenário]\nLimite da revisão: [o que não foi executado]",
+  "security_summary": "Revise permissões por recurso, saídas com dados sensíveis e entradas hostis.",
+  "security_notes": [
+    "Revise permissões por recurso, saídas com dados sensíveis e entradas hostis.",
+    "Use dados sintéticos nos exemplos e revise a saída antes de aplicá-la a um sistema real."
+  ],
+  "checklist": [
+    "A entrada e o resultado de revisão de código com ia estão definidos.",
+    "O template foi preenchido com dados pertinentes e sem segredos.",
+    "Os casos de falha e as evidências foram revisados."
+  ],
+  "application": "Escolha uma mudança pequena do seu projeto. Preencha o template, execute os passos e compare a evidência obtida com o objetivo: encontrar problemas concretos em relação ao contrato esperado.",
+  "limitations": "Este guia orienta o trabalho e não executa ferramentas, garante segurança ou comprova competência. Registre o que não foi testado e procure a documentação da tecnologia antes de decisões específicas.",
+  "sources": [
+    {
+      "title": "Google Engineering Practices",
+      "url": "https://google.github.io/eng-practices/review/reviewer/"
+    }
+  ],
+  "version": "1.0.0",
+  "reviewed_at": "2026-10-26"
+}

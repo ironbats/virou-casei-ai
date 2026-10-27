@@ -1,0 +1,34 @@
+{
+  "slug": "dependencias",
+  "title": "Dependências sob controle",
+  "category": "security",
+  "objective": "Avaliar pacotes antes de incorporá-los ao projeto.",
+  "concept": "Dependências trazem código, licenças e comportamento de instalação. Uma versão popular pode ter vulnerabilidades; pinagem e lockfile ajudam na reprodução, mas não substituem revisão.",
+  "when_to_use": "Antes de instalar uma biblioteca ou atualizar versões.",
+  "steps": [
+    "Confira a origem, manutenção e licença do pacote.",
+    "Revise scripts de instalação, dependências transitivas e exposição do componente.",
+    "Teste a atualização, gere lockfile e registre a verificação de vulnerabilidades."
+  ],
+  "template": "Pacote: [nome exato]\nVersão: [versão fixada]\nFonte oficial: [URL]\nLicença: [identificação]\nMotivo: [capacidade necessária]\nAlternativas: [solução sem pacote ou opção menor]\nScripts de instalação: [efeitos]\nRiscos conhecidos: [achados e contexto]\nAtualização: [compatibilidade e rollback]\nVerificação: [build, teste e scan executados]\nResponsável: [manutenção]",
+  "security_summary": "Não execute instalação de código não confiável no host que contém dados e segredos da plataforma.",
+  "security_notes": [
+    "Não execute instalação de código não confiável no host que contém dados e segredos da plataforma.",
+    "Use dados sintéticos nos exemplos e revise a saída antes de aplicá-la a um sistema real."
+  ],
+  "checklist": [
+    "A entrada e o resultado de dependências sob controle estão definidos.",
+    "O template foi preenchido com dados pertinentes e sem segredos.",
+    "Os casos de falha e as evidências foram revisados."
+  ],
+  "application": "Escolha uma mudança pequena do seu projeto. Preencha o template, execute os passos e compare a evidência obtida com o objetivo: avaliar pacotes antes de incorporá-los ao projeto.",
+  "limitations": "Este guia orienta o trabalho e não executa ferramentas, garante segurança ou comprova competência. Registre o que não foi testado e procure a documentação da tecnologia antes de decisões específicas.",
+  "sources": [
+    {
+      "title": "OWASP Dependency-Check",
+      "url": "https://owasp.org/www-project-dependency-check/"
+    }
+  ],
+  "version": "1.0.0",
+  "reviewed_at": "2026-10-26"
+}

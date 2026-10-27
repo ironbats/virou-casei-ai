@@ -1,0 +1,34 @@
+{
+  "slug": "prompt-injection",
+  "title": "Prompt injection",
+  "category": "security",
+  "objective": "Impedir que conteúdo externo controle ações privilegiadas.",
+  "concept": "Prompt injection ocorre quando instruções hostis em entradas ou documentos tentam desviar o comportamento do modelo. Um prompt de defesa sozinho não substitui autorização e limites de ferramentas.",
+  "when_to_use": "Ao usar documentos recuperados, código gerado ou agentes conectados a serviços.",
+  "steps": [
+    "Identifique todas as entradas que podem conter instruções de terceiros.",
+    "Separe dados de decisões autorizadas e limite ferramentas no servidor.",
+    "Teste um documento hostil e confira que ele não obtém segredos nem executa ações."
+  ],
+  "template": "Fonte não confiável: [documento, prompt ou arquivo]\nInstrução suspeita: [exemplo sintético]\nObjetivo legítimo: [ação autorizada]\nDados permitidos: [escopo]\nFerramentas permitidas: [allowlist]\nAções proibidas: [exfiltração, shell ou alteração administrativa]\nValidação de saída: [schema e regras]\nRevisão humana: [condição]\nTeste adversarial: [entrada e negação esperada]\nEvidência: [resultado observado]",
+  "security_summary": "Fontes e respostas do modelo não concedem acesso, autorização ou privilégios.",
+  "security_notes": [
+    "Fontes e respostas do modelo não concedem acesso, autorização ou privilégios.",
+    "Use dados sintéticos nos exemplos e revise a saída antes de aplicá-la a um sistema real."
+  ],
+  "checklist": [
+    "A entrada e o resultado de prompt injection estão definidos.",
+    "O template foi preenchido com dados pertinentes e sem segredos.",
+    "Os casos de falha e as evidências foram revisados."
+  ],
+  "application": "Escolha uma mudança pequena do seu projeto. Preencha o template, execute os passos e compare a evidência obtida com o objetivo: impedir que conteúdo externo controle ações privilegiadas.",
+  "limitations": "Este guia orienta o trabalho e não executa ferramentas, garante segurança ou comprova competência. Registre o que não foi testado e procure a documentação da tecnologia antes de decisões específicas.",
+  "sources": [
+    {
+      "title": "OWASP Prompt Injection",
+      "url": "https://genai.owasp.org/llmrisk/llm01-prompt-injection/"
+    }
+  ],
+  "version": "1.0.0",
+  "reviewed_at": "2026-10-26"
+}

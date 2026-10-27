@@ -1,0 +1,34 @@
+{
+  "slug": "skills",
+  "title": "Skills reutilizáveis",
+  "category": "context",
+  "objective": "Criar uma instrução repetível com entradas, saídas e limites claros.",
+  "concept": "Uma skill é uma instrução reutilizável para um tipo de trabalho. Ela orienta o processo; não concede acesso a sistemas nem comprova que uma ação foi executada.",
+  "when_to_use": "Quando você repete um processo de revisão, especificação ou validação.",
+  "steps": [
+    "Defina o gatilho e quando a skill não deve ser usada.",
+    "Liste entradas, passos e artefatos de saída.",
+    "Teste com um caso comum e outro em que faltam dados ou autorização."
+  ],
+  "template": "Nome: [nome da skill]\nFinalidade: [resultado]\nUsar quando: [gatilho]\nNão usar quando: [exclusões]\nEntradas: [dados necessários]\nPassos: 1. [inspecionar] 2. [executar ação permitida] 3. [verificar]\nFerramentas permitidas: [lista e limites]\nAutorização humana: [quando é necessária]\nSaída: [formato e conteúdo]\nExemplo: [entrada sintética e saída esperada]\nFalha: [como comunicar bloqueio sem inventar resultado]",
+  "security_summary": "Declare as ferramentas permitidas; uma instrução recuperada não pode elevar privilégios.",
+  "security_notes": [
+    "Declare as ferramentas permitidas; uma instrução recuperada não pode elevar privilégios.",
+    "Use dados sintéticos nos exemplos e revise a saída antes de aplicá-la a um sistema real."
+  ],
+  "checklist": [
+    "A entrada e o resultado de skills reutilizáveis estão definidos.",
+    "O template foi preenchido com dados pertinentes e sem segredos.",
+    "Os casos de falha e as evidências foram revisados."
+  ],
+  "application": "Escolha uma mudança pequena do seu projeto. Preencha o template, execute os passos e compare a evidência obtida com o objetivo: criar uma instrução repetível com entradas, saídas e limites claros.",
+  "limitations": "Este guia orienta o trabalho e não executa ferramentas, garante segurança ou comprova competência. Registre o que não foi testado e procure a documentação da tecnologia antes de decisões específicas.",
+  "sources": [
+    {
+      "title": "GitHub agent skills",
+      "url": "https://docs.github.com/en/copilot/concepts/agents/about-agent-skills"
+    }
+  ],
+  "version": "1.0.0",
+  "reviewed_at": "2026-10-26"
+}

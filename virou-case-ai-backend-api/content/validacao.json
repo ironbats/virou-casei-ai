@@ -1,0 +1,34 @@
+{
+  "slug": "validacao",
+  "title": "Validação de entradas",
+  "category": "security",
+  "objective": "Rejeitar dados inválidos antes de produzir efeitos.",
+  "concept": "Validar confere formato e regras de um dado. Autorização decide quem pode agir; parametrização evita que dados sejam interpretados como SQL. As três são necessárias e distintas.",
+  "when_to_use": "Em formulários, APIs, uploads e respostas estruturadas da IA.",
+  "steps": [
+    "Defina tipos, tamanhos e formatos permitidos para cada campo.",
+    "Valide no servidor e mantenha erros que não exponham detalhes internos.",
+    "Teste limites, campos extras, caracteres inesperados e caminhos de arquivo."
+  ],
+  "template": "Campo: [nome]\nTipo: [string, número ou enum]\nObrigatório: [sim/não]\nTamanho: [mínimo/máximo]\nFormato permitido: [regra]\nRegra de negócio: [restrição]\nAutorização: [ator e recurso]\nEntrada inválida: [exemplo sintético]\nErro esperado: [código e mensagem]\nPersistência: [query parametrizada]\nEvidência: [teste positivo e negativo]",
+  "security_summary": "Não confie na validação do navegador; limites e autorização precisam existir na API.",
+  "security_notes": [
+    "Não confie na validação do navegador; limites e autorização precisam existir na API.",
+    "Use dados sintéticos nos exemplos e revise a saída antes de aplicá-la a um sistema real."
+  ],
+  "checklist": [
+    "A entrada e o resultado de validação de entradas estão definidos.",
+    "O template foi preenchido com dados pertinentes e sem segredos.",
+    "Os casos de falha e as evidências foram revisados."
+  ],
+  "application": "Escolha uma mudança pequena do seu projeto. Preencha o template, execute os passos e compare a evidência obtida com o objetivo: rejeitar dados inválidos antes de produzir efeitos.",
+  "limitations": "Este guia orienta o trabalho e não executa ferramentas, garante segurança ou comprova competência. Registre o que não foi testado e procure a documentação da tecnologia antes de decisões específicas.",
+  "sources": [
+    {
+      "title": "OWASP Input Validation",
+      "url": "https://cheatsheetseries.owasp.org/cheatsheets/Input_Validation_Cheat_Sheet.html"
+    }
+  ],
+  "version": "1.0.0",
+  "reviewed_at": "2026-10-26"
+}

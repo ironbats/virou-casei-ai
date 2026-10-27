@@ -1,0 +1,34 @@
+{
+  "slug": "sdd",
+  "title": "SDD: da ideia à especificação",
+  "category": "planning",
+  "objective": "Transformar uma ideia em comportamentos verificáveis antes de pedir código.",
+  "concept": "SDD organiza o desenvolvimento a partir de uma especificação. Ela descreve resultados, regras e evidências; não é um pedido genérico para a IA construir tudo.",
+  "when_to_use": "Antes de começar um projeto ou alterar um fluxo importante.",
+  "steps": [
+    "Descreva o problema, quem o enfrenta e o resultado esperado.",
+    "Defina regras, limites e situações que devem ser recusadas.",
+    "Escreva cenários de aceite e revise as ambiguidades antes de implementar."
+  ],
+  "template": "Problema: [dor observável]\nPúblico: [atores e permissões]\nObjetivo: [resultado mensurável]\nDentro do escopo: [capacidades]\nFora do escopo: [limites]\nRegras: [invariantes]\nDados: [classificação, proprietário e retenção]\nFluxo principal: [entrada, ação, saída]\nErros: [situação e resposta]\nAceite: Dado [estado], quando [ação], então [resultado verificável].\nEvidência: [teste ou demonstração exigida]\nQuestões em aberto: [decisão e responsável]",
+  "security_summary": "Classifique dados e fronteiras de confiança antes de descrever integrações.",
+  "security_notes": [
+    "Classifique dados e fronteiras de confiança antes de descrever integrações.",
+    "Use dados sintéticos nos exemplos e revise a saída antes de aplicá-la a um sistema real."
+  ],
+  "checklist": [
+    "A entrada e o resultado de sdd: da ideia à especificação estão definidos.",
+    "O template foi preenchido com dados pertinentes e sem segredos.",
+    "Os casos de falha e as evidências foram revisados."
+  ],
+  "application": "Escolha uma mudança pequena do seu projeto. Preencha o template, execute os passos e compare a evidência obtida com o objetivo: transformar uma ideia em comportamentos verificáveis antes de pedir código.",
+  "limitations": "Este guia orienta o trabalho e não executa ferramentas, garante segurança ou comprova competência. Registre o que não foi testado e procure a documentação da tecnologia antes de decisões específicas.",
+  "sources": [
+    {
+      "title": "GitHub Spec Kit",
+      "url": "https://github.com/github/spec-kit"
+    }
+  ],
+  "version": "1.0.0",
+  "reviewed_at": "2026-10-26"
+}

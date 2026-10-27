@@ -1,0 +1,34 @@
+{
+  "slug": "debugging",
+  "title": "Debugging: da hipótese à causa",
+  "category": "quality",
+  "objective": "Investigar antes de modificar o código.",
+  "concept": "Depuração compara o esperado com o observado e elimina hipóteses usando evidências. Uma mensagem de erro aponta um sintoma; a causa pode estar antes no fluxo.",
+  "when_to_use": "Quando um comportamento falha ou uma regressão aparece.",
+  "steps": [
+    "Registre uma reprodução mínima e o resultado esperado.",
+    "Colete logs sanitizados e teste uma hipótese por vez.",
+    "Corrija a causa demonstrada e execute a regressão no mesmo cenário."
+  ],
+  "template": "Sintoma: [falha observada]\nEsperado: [contrato]\nReprodução: [passos e dados sintéticos]\nVersão e ambiente: [contexto]\nHipótese: [causa provável]\nExperimento: [como confirmar ou refutar]\nEvidência: [resultado]\nCausa demonstrada: [conclusão]\nCorreção: [mudança]\nRegressão: [teste]\nNão verificado: [limitações]",
+  "security_summary": "Remova tokens, senhas e dados pessoais dos logs antes de compartilhá-los.",
+  "security_notes": [
+    "Remova tokens, senhas e dados pessoais dos logs antes de compartilhá-los.",
+    "Use dados sintéticos nos exemplos e revise a saída antes de aplicá-la a um sistema real."
+  ],
+  "checklist": [
+    "A entrada e o resultado de debugging: da hipótese à causa estão definidos.",
+    "O template foi preenchido com dados pertinentes e sem segredos.",
+    "Os casos de falha e as evidências foram revisados."
+  ],
+  "application": "Escolha uma mudança pequena do seu projeto. Preencha o template, execute os passos e compare a evidência obtida com o objetivo: investigar antes de modificar o código.",
+  "limitations": "Este guia orienta o trabalho e não executa ferramentas, garante segurança ou comprova competência. Registre o que não foi testado e procure a documentação da tecnologia antes de decisões específicas.",
+  "sources": [
+    {
+      "title": "Google SRE troubleshooting",
+      "url": "https://sre.google/sre-book/effective-troubleshooting/"
+    }
+  ],
+  "version": "1.0.0",
+  "reviewed_at": "2026-10-26"
+}

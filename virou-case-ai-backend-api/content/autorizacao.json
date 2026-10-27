@@ -1,0 +1,34 @@
+{
+  "slug": "autorizacao",
+  "title": "Autenticação, autorização e isolamento",
+  "category": "security",
+  "objective": "Impedir que uma conta acesse recursos de outra.",
+  "concept": "Autenticação confirma identidade; autorização verifica uma ação sobre um recurso. Estar logado não permite consultar qualquer identificador encontrado em uma URL.",
+  "when_to_use": "Em toda leitura, edição, operação durável e download autenticado.",
+  "steps": [
+    "Descreva ator, ação, recurso e dono do recurso.",
+    "Faça o servidor obter o tenant da sessão e conferir propriedade.",
+    "Teste outra conta, sessão expirada e recurso inexistente com resposta consistente."
+  ],
+  "template": "Ator: [identidade e papel]\nAção: [ler, alterar ou exportar]\nRecurso: [tipo e ID]\nDono/tenant: [origem confiável]\nCondição de permissão: [regra]\nNegação padrão: [resposta]\nTeste cruzado: [conta A tenta acessar B]\nSessão expirada: [resultado]\nRecurso inexistente: [resultado]\nAuditoria: [evento sem dados sensíveis]",
+  "security_summary": "Verifique o dono no servidor em todos os recursos; esconder um botão não protege dados.",
+  "security_notes": [
+    "Verifique o dono no servidor em todos os recursos; esconder um botão não protege dados.",
+    "Use dados sintéticos nos exemplos e revise a saída antes de aplicá-la a um sistema real."
+  ],
+  "checklist": [
+    "A entrada e o resultado de autenticação, autorização e isolamento estão definidos.",
+    "O template foi preenchido com dados pertinentes e sem segredos.",
+    "Os casos de falha e as evidências foram revisados."
+  ],
+  "application": "Escolha uma mudança pequena do seu projeto. Preencha o template, execute os passos e compare a evidência obtida com o objetivo: impedir que uma conta acesse recursos de outra.",
+  "limitations": "Este guia orienta o trabalho e não executa ferramentas, garante segurança ou comprova competência. Registre o que não foi testado e procure a documentação da tecnologia antes de decisões específicas.",
+  "sources": [
+    {
+      "title": "OWASP Authorization",
+      "url": "https://cheatsheetseries.owasp.org/cheatsheets/Authorization_Cheat_Sheet.html"
+    }
+  ],
+  "version": "1.0.0",
+  "reviewed_at": "2026-10-26"
+}

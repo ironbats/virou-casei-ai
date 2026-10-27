@@ -1,0 +1,34 @@
+{
+  "slug": "segredos",
+  "title": "Proteção de chaves e segredos",
+  "category": "security",
+  "objective": "Evitar exposição e limitar o alcance de credenciais.",
+  "concept": "Segredos autenticam serviços e pessoas. Colocar uma chave no frontend, repositório ou prompt pode entregá-la a terceiros; apagar a linha não revoga uma chave vazada.",
+  "when_to_use": "Ao configurar integrações, revisar exports ou responder a um vazamento.",
+  "steps": [
+    "Inventarie credenciais e seus proprietários sem copiar os valores.",
+    "Defina armazenamento, privilégio e rotação de cada segredo.",
+    "Se houver exposição, revogue ou rotacione e verifique o uso indevido."
+  ],
+  "template": "Credencial: [nome, nunca valor]\nProprietário: [responsável]\nFinalidade: [integração]\nPrivilégios mínimos: [escopos]\nArmazenamento permitido: [ambiente protegido]\nLocais proibidos: [frontend, prompt, log e repositório]\nRotação: [procedimento e frequência]\nDetecção: [scan e revisão]\nResposta a vazamento: [revogar, investigar e substituir]\nValidação: [teste sem revelar o segredo]",
+  "security_summary": "Um scanner ajuda a detectar padrões conhecidos, mas não garante que todo segredo foi encontrado.",
+  "security_notes": [
+    "Um scanner ajuda a detectar padrões conhecidos, mas não garante que todo segredo foi encontrado.",
+    "Use dados sintéticos nos exemplos e revise a saída antes de aplicá-la a um sistema real."
+  ],
+  "checklist": [
+    "A entrada e o resultado de proteção de chaves e segredos estão definidos.",
+    "O template foi preenchido com dados pertinentes e sem segredos.",
+    "Os casos de falha e as evidências foram revisados."
+  ],
+  "application": "Escolha uma mudança pequena do seu projeto. Preencha o template, execute os passos e compare a evidência obtida com o objetivo: evitar exposição e limitar o alcance de credenciais.",
+  "limitations": "Este guia orienta o trabalho e não executa ferramentas, garante segurança ou comprova competência. Registre o que não foi testado e procure a documentação da tecnologia antes de decisões específicas.",
+  "sources": [
+    {
+      "title": "OWASP Secrets Management",
+      "url": "https://cheatsheetseries.owasp.org/cheatsheets/Secrets_Management_Cheat_Sheet.html"
+    }
+  ],
+  "version": "1.0.0",
+  "reviewed_at": "2026-10-26"
+}
