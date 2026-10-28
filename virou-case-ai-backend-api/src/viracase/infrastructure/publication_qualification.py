@@ -59,6 +59,15 @@ def qualified(row, stack=None, executor_digest=None):
 
     if row.validation.get("publication_check_blocked"):
         return False
+    blocked_stacks = row.validation.get("publication_check_blocked_stacks", [])
+    if stack and stack in blocked_stacks:
+        return False
+    if not stack and blocked_stacks:
+        return any(
+            qualified(row, candidate, executor_digest)
+            for candidate in row.settings["allowed_stacks"]
+            if candidate not in blocked_stacks
+        )
     if runtime_verified(row, stack, executor_digest):
         return True
     evidence = row.validation.get("qualification", {})

@@ -132,7 +132,10 @@ def create_app(admin=False, dependencies=None):
                     return error_response(request, "PAYLOAD_TOO_LARGE", "Conteúdo acima do limite.", 413)
             request._body = bytes(body)
         try:
-            response = await call_next(request)
+            from viracase.infrastructure.publication_logging import publication_context
+
+            with publication_context(request_id=request.state.request_id):
+                response = await call_next(request)
         except Exception as exc:
             log.error(
                 json.dumps(

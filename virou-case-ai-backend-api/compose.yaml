@@ -20,7 +20,7 @@ x-runtime-environment: &runtime-environment
   VIRA_RESTORE_HOLD: ${VIRA_RESTORE_HOLD:-false}
 x-backend: &backend
   build: .
-  image: viroucaseai-backend:2.0.0.19
+  image: viroucaseai-backend:2.0.0.34
   user: "${VIRA_RUNTIME_UID:-10001}:${VIRA_RUNTIME_GID:-10001}"
   init: true
   read_only: true
@@ -197,6 +197,7 @@ services:
     security_opt:
       - no-new-privileges:true
       - seccomp=./config/publication-seccomp.json
+      - systempaths=unconfined
     restart: unless-stopped
     command: ["python", "-m", "viracase.infrastructure.worker"]
     volumes:

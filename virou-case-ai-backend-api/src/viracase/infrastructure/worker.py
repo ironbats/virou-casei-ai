@@ -27,6 +27,7 @@ from viracase.infrastructure.models import (
     new_id,
 )
 from viracase.infrastructure.provider_errors import report_rejection
+from viracase.infrastructure.publication_logging import emit, exception_fields, publication_context
 from viracase.infrastructure.providers import ProviderRejected, ProviderUncertain
 from viracase.infrastructure.repository import project_dto
 
@@ -57,9 +58,9 @@ class Worker:
                     op.state, job.state, op.error_code = (
                         "reconciling",
                         "reconciling",
-                        "VERIFICATION_CLEANUP_PENDING",
+                        "VERIFICATION_RESUME_REQUIRED",
                     )
-                    op.progress_stage = "verification_cleanup"
+                    op.progress_stage = "verification_retained"
                 elif op.type == "publication" and op.result.get("external_effect_pending"):
                     op.state, job.state, op.progress_stage = (
                         "reconciling",
@@ -109,13 +110,10 @@ class Worker:
             if claimed.rowcount != 1:
                 return False
         try:
-            self.execute(oid, token)
+            with publication_context(operation_id=oid):
+                self.execute(oid, token)
         except Exception as exc:
-            log.error(
-                json.dumps(
-                    {"operation_id": oid, "event": "worker_failure", "exception_type": type(exc).__name__}
-                )
-            )
+            emit("worker_failure", "error", operation_id=oid, **exception_fields(exc))
             with self.repo.sessions.begin() as db:
                 op = db.get(Operation, oid)
                 self.repo.account(db, op.account_id, True)
@@ -467,8 +465,8 @@ def main():
     worker = Worker(repo, gateway, catalog)
     from viracase.infrastructure.runtime_monitor import start_monitor
 
-    monitor = start_monitor(repo, stop)
     logging.basicConfig(level=logging.INFO, format="%(message)s")
+    monitor = start_monitor(repo, stop)
     while not stop.is_set():
         try:
             active = worker.tick()
@@ -476,7 +474,7 @@ def main():
             Path("/tmp/viroucaseai-worker-heartbeat").touch()
             stop.wait(0.2 if active else 2)
         except Exception as exc:
-            log.error(json.dumps({"event": "worker_loop_failure", "exception_type": type(exc).__name__}))
+            emit("worker_loop_failure", "error", **exception_fields(exc))
             stop.wait(5)
     monitor.join(timeout=10)
     engine.dispose()

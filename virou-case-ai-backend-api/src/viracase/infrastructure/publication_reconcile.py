@@ -6,6 +6,7 @@ from viracase.infrastructure.cloudflare_gateway import CloudflareGateway
 from viracase.infrastructure.integrations import Integrations
 from viracase.infrastructure.models import Audit, Job, Operation, PublicationResource
 from viracase.infrastructure.publication_migrations import LEDGER
+from viracase.infrastructure.publication_verification import database_binding_matches
 from viracase.infrastructure.repository import operation_dto
 
 
@@ -58,7 +59,7 @@ def reconcile_publication(repo, actor, oid, key, reason, gateway_factory=Cloudfl
             "viroucaseai" not in tags
             or not database
             or not any(
-                b.get("type") == "d1" and b.get("name") == "DB" and b.get("id") == database["uuid"]
+                database_binding_matches(b, database["uuid"])
                 for b in bindings
             )
         ):

@@ -111,6 +111,8 @@ def events(repo, actor, service=None, level=None, correlation=None, project=None
                     "message": STAGES.get(
                         row.stage,
                         {
+                            "executor_ready": "Executor de publicação isolado e disponível.",
+                            "executor_unavailable": "Executor de publicação bloqueado. Consulte o código e o diagnóstico na conexão Cloudflare.",
                             "recommendation_pending": "Jev: preparação iniciada.",
                             "recommendation_ready": "Jev: sugestões recebidas.",
                             "recommendation_fallback": "Jev: seleção manual disponível; consulte o código do motivo.",
@@ -150,6 +152,21 @@ class WorkerBuildStatus:
 def heartbeat(repo, identity, diagnostics):
     with repo.sessions.begin() as db:
         row = db.get(RuntimeStatus, identity)
+        previous = row.details if row else {}
+        signature = lambda value: (value.get("available"), value.get("code"), value.get("fingerprint"), value.get("failed_checks"))
+        if not row or signature(previous) != signature(diagnostics):
+            available = diagnostics.get("available") is True
+            diagnostic_id = diagnostics.get("diagnostic_id")
+            if not isinstance(diagnostic_id, str) or len(diagnostic_id) != 36:
+                diagnostic_id = new_id()
+            db.add(RuntimeEvent(
+                service="cloudflare", level="info" if available else "error",
+                correlation_id=diagnostic_id,
+                stage="executor_ready" if available else "executor_unavailable",
+                state="ready" if available else "blocked",
+                error_code=None if available else diagnostics.get("code", "EXECUTOR_UNAVAILABLE"),
+                duration_ms=diagnostics.get("duration_ms"),
+            ))
         if not row:
             row = RuntimeStatus(id=identity)
             db.add(row)

@@ -90,13 +90,22 @@ def mount_integration_routes(app, prefix, repo, actor, key, version):
         from viracase.infrastructure.publication import PublicationService, MESSAGES
         from viracase.infrastructure.observability import WorkerBuildStatus
         from viracase.infrastructure.models import Operation
+        from viracase.infrastructure.publication_verification import verification_summary
         from sqlalchemy import select
 
-        executor = WorkerBuildStatus(repo)
-        service = PublicationService(repo, executor)
         with repo.sessions() as db:
+            registry.require_admin(repo.account(db, who["id"]))
+            executor = WorkerBuildStatus(repo)
+            service = PublicationService(repo, executor)
             row = registry.latest(db, "cloudflare", connection_id=identity)
             codes = service.configuration_reasons(row)
+            verification_codes = []
+            if not row or row.state not in {"validated", "active"} or not registry.fresh(row) or not row.validation.get("ready"):
+                verification_codes.append("CONFIGURATION_INVALID")
+            if not executor.available() or not executor.fingerprint():
+                verification_codes.append("EXECUTOR_UNAVAILABLE")
+            if repo.config.restore_hold or not repo.config.lifecycle_enabled:
+                verification_codes.append("LIFECYCLE_LOCKED")
             latest = db.scalar(
                 select(Operation)
                 .where(
@@ -106,18 +115,22 @@ def mount_integration_routes(app, prefix, repo, actor, key, version):
                 .order_by(Operation.created_at.desc())
                 .limit(1)
             )
+            stack_readiness = []
+            for stack in row.settings["allowed_stacks"] if row else []:
+                stack_codes = service.configuration_reasons(row, stack)
+                stack_readiness.append({
+                    "stack": stack,
+                    "can_publish": not stack_codes,
+                    "reasons": [{"code": code, "message": MESSAGES[code]} for code in stack_codes],
+                })
             return {
                 "can_publish": not codes,
+                "stack_readiness": stack_readiness,
+                "can_verify": not verification_codes,
+                "verification_reasons": [{"code": c, "message": MESSAGES[c]} for c in verification_codes],
                 "workers": executor.workers,
                 "reasons": [{"code": c, "message": MESSAGES[c]} for c in codes],
-                "verification": {
-                    "id": latest.id,
-                    "state": latest.state,
-                    "stage": latest.progress_stage,
-                    "error_code": latest.error_code,
-                }
-                if latest
-                else None,
+                "verification": verification_summary(latest),
             }
 
     @app.post(prefix + "/integration-connections/{identity}/verify-publication", status_code=202)

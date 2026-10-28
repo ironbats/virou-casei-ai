@@ -279,7 +279,10 @@ class Integrations:
             was_active = row.state == "active"
             preserved = {
                 name: row.validation[name]
-                for name in ("qualification", "runtime_verification", "publication_check_blocked")
+                for name in (
+                    "qualification", "runtime_verification", "publication_check_blocked",
+                    "publication_check_blocked_stacks",
+                )
                 if name in row.validation and evidence.get("ready")
             }
             row.validation = {**preserved, **evidence, "checked_at": utcnow().isoformat()}

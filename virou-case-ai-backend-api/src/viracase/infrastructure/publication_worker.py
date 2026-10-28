@@ -5,7 +5,9 @@ from viracase.domain.rules import RuleError, utcnow
 from viracase.infrastructure.cloudflare_gateway import CloudflareGateway, PublicationUncertain
 from viracase.infrastructure.models import IntegrationConfig, Job, Operation, PublicationResource
 from viracase.infrastructure.publication import PublicationService
+from viracase.infrastructure.publication_logging import emit, exception_fields
 from viracase.infrastructure.publication_migrations import apply_migrations
+from viracase.infrastructure.publication_verification import failure_record
 
 
 def execute_publication(worker, oid, token, gateway_factory=CloudflareGateway, builder=None):
@@ -16,6 +18,8 @@ def execute_publication(worker, oid, token, gateway_factory=CloudflareGateway, b
 
     def checkpoint(stage, changes=None, external=False):
         nonlocal current_stage
+        if stage != current_stage:
+            emit("publication_stage", operation_id=oid, stage=stage)
         current_stage = stage
         with repo.sessions.begin() as db:
             op = db.get(Operation, oid)
@@ -103,7 +107,7 @@ def execute_publication(worker, oid, token, gateway_factory=CloudflareGateway, b
         gateway.enable(state["name"])
         url = f"https://{state['name']}.{state['subdomain']}.workers.dev"
         checkpoint("publication_verifying", external=True)
-        gateway.verify(url, state["revision"])
+        verification = gateway.verify(url, state["revision"])
         checkpoint(
             "publication_verified",
             {"url": url, "published_revision_id": state["revision"], "published_at": utcnow().isoformat()},
@@ -124,9 +128,11 @@ def execute_publication(worker, oid, token, gateway_factory=CloudflareGateway, b
                 "deployment_id": deployment,
                 "verified_at": utcnow().isoformat(),
                 "external_effect_pending": False,
+                "remote_verification": verification,
             }
             record_progress(op, "publication_verified")
     except Exception as exc:
+        emit("publication_failed", "error", operation_id=oid, stage=current_stage, **exception_fields(exc))
         with repo.sessions.begin() as db:
             op = db.get(Operation, oid)
             repo.account(db, op.account_id, True)
@@ -138,4 +144,6 @@ def execute_publication(worker, oid, token, gateway_factory=CloudflareGateway, b
             )
             op.state, job.state = ("reconciling", "reconciling") if uncertain else ("failed", "done")
             op.error_code = exc.code if isinstance(exc, RuleError) else "PUBLICATION_FAILED"
+            secrets = (state["token"],) if "state" in locals() and state else ()
+            op.result = {**op.result, "publication_failure": failure_record(exc, current_stage, secrets=secrets)}
             record_progress(op, "publication_reconciling" if uncertain else "publication_failed")

@@ -1,33 +1,33 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
-command -v docker >/dev/null || { echo "Docker é necessário." >&2; exit 1; }
-docker compose version >/dev/null
-docker info >/dev/null
-if [[ -z "${COMPOSE_FILE:-}" ]] && grep -q '^viracase-publication ' /sys/kernel/security/apparmor/profiles 2>/dev/null; then
-  export COMPOSE_FILE=compose.yaml:compose.publication-apparmor.yaml
-fi
 if [[ ! -f .env ]]; then
   cp .env.example .env
   chmod 600 .env
-  echo "Configure as senhas do banco e VIRA_ADMIN_LOGIN, VIRA_ADMIN_NAME e VIRA_ADMIN_PASSWORD no .env; depois execute novamente." >&2
+  echo 'Configure as senhas do banco e VIRA_ADMIN_LOGIN, VIRA_ADMIN_NAME e VIRA_ADMIN_PASSWORD no .env; depois execute novamente.' >&2
   exit 1
 fi
-if [[ -z "${VIRA_RUNTIME_UID:-}" && "$(id -u)" != 0 ]]; then export VIRA_RUNTIME_UID="$(id -u)"; fi
-if [[ -z "${VIRA_RUNTIME_GID:-}" && "$(id -g)" != 0 ]]; then export VIRA_RUNTIME_GID="$(id -g)"; fi
+source script/publication-runtime.sh
+publication_prepare_compose
+publication_preserve_runtime_user
 mkdir -p var/sources var/secrets
-docker compose config --quiet
-if ! docker compose up -d --build --wait --wait-timeout 300; then
-  echo "Diagnóstico dos inicializadores (últimas 120 linhas):" >&2
-  docker compose logs --no-color --tail=120 initialize storage-init || true
-  echo "Inicialização incompleta. Consulte: docker compose logs --tail=100 initialize storage-init public-api admin-api worker" >&2
+publication_compose config --quiet
+if ! publication_compose up -d --build --wait --wait-timeout 300; then
+  echo 'Diagnostico dos inicializadores (ultimas 120 linhas):' >&2
+  publication_compose logs --no-color --tail=120 initialize storage-init || true
+  echo 'Inicializacao incompleta. Consulte os logs de initialize, storage-init, public-api, admin-api e worker.' >&2
   exit 1
 fi
-if ! docker compose run --rm --no-deps initialize python script/bootstrap-admin.py --check; then
-  echo "Falha na verificação das credenciais administrativas. Consulte: docker compose logs --tail=120 initialize" >&2
+if ! publication_compose run --rm --no-deps initialize python script/bootstrap-admin.py --check; then
+  echo 'Falha na verificacao das credenciais administrativas. Consulte os logs de initialize.' >&2
   exit 1
 fi
-echo "✅ Containers do viroucaseai iniciados e healthchecks aprovados."
-echo "Execute o script/run-local.sh do frontend e do backoffice."
-echo "Os processos Python rodam nos containers. O Python do Ubuntu não é utilizado."
-docker compose ps
+publication_assert_worker_profile
+printf '%s\n' 'Containers iniciados e credenciais administrativas verificadas. Conferindo o executor de publicacao.'
+if ! publication_compose exec -T worker python script/diagnose-publication.py --pretty; then
+  echo 'A plataforma esta iniciada, mas a publicacao continua bloqueada pelo diagnostico acima.' >&2
+  exit 2
+fi
+printf '%s\n' 'Executor local READY. A publicacao externa ainda exige a verificacao operacional da conexao no Backoffice.'
+echo 'Execute o script/run-local.sh do frontend e do backoffice.'
+publication_compose ps

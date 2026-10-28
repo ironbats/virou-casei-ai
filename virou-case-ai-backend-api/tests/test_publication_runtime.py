@@ -13,7 +13,6 @@ from test_publication_pipeline import (
     execute,
 )
 from viracase.domain.rules import RuleError, utcnow
-from viracase.infrastructure.cloudflare_gateway import PublicationUncertain
 from viracase.infrastructure.models import Job, Operation, PublicationResource
 from viracase.infrastructure.observability import heartbeat
 from viracase.infrastructure.project_deletion import execute_deletion, request_deletion
@@ -65,26 +64,27 @@ def claim(repo, oid):
         job.lease_until = utcnow() + timedelta(minutes=5)
 
 
-def verification(system, publication):
+def verification(system, publication, key="check"):
     repo, registry = system["repo"], publication[0]
     heartbeat(
         repo, "worker:test", {"available": True, "fingerprint": "f" * 64, "stacks": ["hono-typescript-d1"]}
     )
     cfg = registry.get("cloudflare")
     op = request_check(
-        repo, system["admin"], cfg["connection_id"], "check", cfg["version"], "Teste operacional controlado"
+        repo, system["admin"], cfg["connection_id"], key, cfg["version"], "Teste operacional controlado"
     )
     claim(repo, op["id"])
     return op
 
 
-def test_runtime_check_verifies_remote_build_and_cleanup_before_releasing(publication, system):
+def test_runtime_check_verifies_remote_build_and_retains_resources_before_releasing(publication, system):
     repo = system["repo"]
     registry, service, actor, project = publication
     op = verification(system, publication)
     remote = ProbeRemote()
     execute_check(Worker(repo, None, None), op["id"], "lease", lambda *_: remote, ProbeBuilder())
-    assert remote.db is None and remote.remote is None
+    assert remote.db is not None and remote.remote is not None
+    assert "delete" not in remote.calls and "disable" not in remote.calls
     assert remote.calls.count("create_database") == 1
     assert repo.operation(system["admin"], op["id"])["state"] == "succeeded"
     assert PublicationService(repo).readiness(actor, project["id"])["can_publish"]
@@ -102,26 +102,21 @@ def test_revalidation_preserves_formal_qualification(publication, system):
     assert service.readiness(actor, project["id"])["can_publish"]
 
 
-def test_incomplete_cleanup_remains_blocked_and_can_resume(publication, system):
+def test_repeated_checks_reuse_owned_resources_without_deletion(publication, system):
     repo = system["repo"]
     op = verification(system, publication)
     remote = ProbeRemote()
-    original = remote.delete
-
-    def unavailable(*args):
-        raise PublicationUncertain()
-
-    remote.delete = unavailable
     execute_check(Worker(repo, None, None), op["id"], "lease", lambda *_: remote, ProbeBuilder())
-    result = repo.operation(system["admin"], op["id"])
-    assert result["state"] == "reconciling" and result["error_code"] == "VERIFICATION_CLEANUP_PENDING"
-    assert not PublicationService(repo).readiness(publication[2], publication[3]["id"])["can_publish"]
-    remote.delete = original
-    resume_check(repo, system["admin"], op["id"], "resume", "Conferir e remover recursos temporários")
-    claim(repo, op["id"])
-    execute_check(Worker(repo, None, None), op["id"], "lease", lambda *_: remote, ProbeBuilder())
-    assert repo.operation(system["admin"], op["id"])["state"] == "succeeded"
+    first_database = dict(remote.db)
+    first_revision = remote.remote["tags"][1]
+    second = verification(system, publication, "check-again")
+    execute_check(Worker(repo, None, None), second["id"], "lease", lambda *_: remote, ProbeBuilder())
+    assert repo.operation(system["admin"], second["id"])["state"] == "succeeded"
+    assert remote.db == first_database
+    assert remote.remote["tags"][1] != first_revision
     assert remote.calls.count("create_database") == 1
+    assert remote.calls.count("upload") == 2
+    assert "delete" not in remote.calls and "disable" not in remote.calls
 
 
 def test_check_restart_after_creation_requires_explicit_resume(publication, system):
@@ -210,40 +205,27 @@ def test_failed_reverification_invalidates_previous_release(publication, system)
     assert not service.readiness(actor, project["id"])["can_publish"]
 
 
-def test_rotation_allows_cleanup_with_current_credential_without_verifying_old_config(publication, system):
+def test_rotation_preserves_diagnostic_resources_without_verifying_old_config(publication, system):
     repo, registry = system["repo"], publication[0]
     op = verification(system, publication)
     remote = ProbeRemote()
-    original = remote.delete
-    remote.delete = lambda *_: None
     execute_check(Worker(repo, None, None), op["id"], "lease", lambda *_: remote, ProbeBuilder())
-    assert repo.operation(system["admin"], op["id"])["state"] == "reconciling"
+    with repo.sessions.begin() as db:
+        db.get(Operation, op["id"]).state = "reconciling"
+        db.scalar(select(Job).where(Job.operation_id == op["id"])).state = "reconciling"
     cfg = registry.get("cloudflare")
-    registry.save(
-        system["admin"],
-        "cloudflare",
-        "rotate",
-        cfg["version"],
-        {
-            "settings": cfg["settings"],
-            "token": "synthetic-rotated-credential",
-            "reason": "Rotação para concluir a limpeza",
-        },
-    )
-    remote.delete = original
-    resume_check(repo, system["admin"], op["id"], "resume", "Limpeza com a credencial corrigida")
+    registry.save(system["admin"], "cloudflare", "rotate", cfg["version"], {
+        "settings": cfg["settings"], "token": "synthetic-rotated-credential",
+        "reason": "Rotação durante a verificação interrompida",
+    })
+    before = list(remote.calls)
+    resume_check(repo, system["admin"], op["id"], "resume", "Retomar sem excluir recursos")
     claim(repo, op["id"])
-    captured = []
-
-    def factory(policy, secret):
-        captured.append(secret)
-        return remote
-
     with pytest.raises(RuleError) as changed:
-        execute_check(Worker(repo, None, None), op["id"], "lease", factory, ProbeBuilder())
+        execute_check(Worker(repo, None, None), op["id"], "lease", lambda *_: remote, ProbeBuilder())
     assert changed.value.code == "VERSION_CONFLICT"
-    assert captured == ["synthetic-rotated-credential"]
-    assert remote.remote is None and remote.db is None
+    assert remote.calls == before
+    assert remote.remote is not None and remote.db is not None
     assert not registry.get("cloudflare")["validation"].get("runtime_verification")
 
 
@@ -274,3 +256,21 @@ def test_diagnostic_finds_pending_connection_after_many_unrelated_checks(publica
     assert response.status_code == 200
     assert response.json()["verification"]["id"] == pending["id"]
     assert not response.json()["can_publish"]
+
+
+def test_runtime_verification_accepts_current_d1_database_id_binding(publication, system):
+    repo = system["repo"]
+    op = verification(system, publication)
+    remote = ProbeRemote()
+    upload = remote.upload
+
+    def current_api_binding(name, database_id, artifact):
+        result = upload(name, database_id, artifact)
+        binding = remote.remote["bindings"][0]
+        binding["database_id"] = binding.pop("id")
+        return result
+
+    remote.upload = current_api_binding
+    execute_check(Worker(repo, None, None), op["id"], "lease", lambda *_: remote, ProbeBuilder())
+    assert repo.operation(system["admin"], op["id"])["state"] == "succeeded"
+    assert PublicationService(repo).readiness(publication[2], publication[3]["id"])["can_publish"]

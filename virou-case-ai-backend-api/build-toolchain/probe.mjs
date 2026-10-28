@@ -8,8 +8,8 @@ const limits = fs.readFileSync("/proc/self/limits", "utf8");
 const status = fs.readFileSync("/proc/self/status", "utf8");
 const limit = (name, maximum) => {
   const line = limits.split("\n").find((row) => row.startsWith(name));
-  const value = line?.slice(name.length).trim().split(/\s+/)[0];
-  return value !== undefined && value !== "unlimited" && Number(value) <= maximum;
+  const values = line?.slice(name.length).trim().split(/\s+/).slice(0, 2);
+  return values?.length === 2 && values.every((value) => /^\d+$/.test(value) && Number(value) <= maximum);
 };
 const nested = spawnSync("/usr/bin/unshare", ["--user", "/usr/bin/true"]);
 const result = {

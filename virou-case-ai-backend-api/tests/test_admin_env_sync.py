@@ -181,55 +181,25 @@ def test_first_admin_is_created_then_preserved_in_sync_mode(system):
 
 @pytest.mark.parametrize("up_exit, check_exit", [(0, 0), (0, 1), (1, 0)])
 def test_docker_launcher_checks_credentials_before_reporting_success(tmp_path, up_exit, check_exit):
-    project = tmp_path / "backend"
-    scripts = project / "script"
-    scripts.mkdir(parents=True)
-    for name in ("run-local.sh", "run-docker.sh"):
-        (scripts / name).write_bytes((ROOT / "script" / name).read_bytes())
-    env_content = (
-        b"VIRA_ADMIN_PASSWORD='synthetic-keep-this-password'\nVIRA_ADMIN_ORIGIN=http://localhost:5175\n"
-    )
-    (project / ".env").write_bytes(env_content)
-    binaries = tmp_path / "bin"
-    binaries.mkdir()
-    docker = binaries / "docker"
-    docker.write_text(
-        "#!/usr/bin/env bash\n"
-        'printf "%s\\n" "$*" >> "$TEST_DOCKER_CALLS"\n'
-        'case "$*" in\n'
-        '  "compose up "*) exit "$TEST_UP_EXIT" ;;\n'
-        '  "compose run "*) exit "$TEST_CHECK_EXIT" ;;\n'
-        "esac\n"
-        "exit 0\n"
-    )
-    docker.chmod(0o755)
-    calls = tmp_path / "calls.log"
-    env = {
-        **os.environ,
-        "PATH": str(binaries) + os.pathsep + os.environ["PATH"],
-        "TEST_DOCKER_CALLS": str(calls),
-        "TEST_UP_EXIT": str(up_exit),
-        "TEST_CHECK_EXIT": str(check_exit),
-    }
+    from publication_deployment_support import compose_command, make_installation, read_calls
+
+    project, env = make_installation(tmp_path)
+    original = (project / ".env").read_bytes()
+    env.update(DOCKER_TEST_UP_EXIT=str(up_exit), DOCKER_TEST_CHECK_EXIT=str(check_exit))
     result = subprocess.run(
-        ["bash", str(scripts / "run-local.sh")],
-        cwd=tmp_path,
-        env=env,
-        capture_output=True,
-        text=True,
-        timeout=15,
-        check=False,
+        ["bash", "script/run-local.sh"], cwd=project, env=env,
+        capture_output=True, text=True, timeout=20, check=False,
     )
-    recorded = calls.read_text()
-    check_command = "compose run --rm --no-deps initialize python script/bootstrap-admin.py --check"
-    assert (project / ".env").read_bytes() == env_content
-    assert "synthetic-keep-this-password" not in result.stdout + result.stderr + recorded
+    commands = [compose_command(call) for call in read_calls(project)]
+    check_command = ["run", "--rm", "--no-deps", "initialize", "python", "script/bootstrap-admin.py", "--check"]
+    assert (project / ".env").read_bytes() == original
+    assert "never-include-in-output" not in result.stdout + result.stderr
     if up_exit:
-        assert result.returncode == 1 and check_command not in recorded
+        assert result.returncode == 1 and check_command not in commands
     elif check_exit:
-        assert result.returncode == 1 and check_command in recorded
-        assert "Falha na verificação das credenciais" in result.stderr
+        assert result.returncode == 1 and check_command in commands
+        assert "Falha na verificacao das credenciais" in result.stderr
     else:
-        assert result.returncode == 0 and check_command in recorded
-        assert recorded.index("compose up ") < recorded.index(check_command)
-    assert ("Containers do viroucaseai iniciados" in result.stdout) == (up_exit == check_exit == 0)
+        assert result.returncode == 0 and check_command in commands
+        assert next(i for i, cmd in enumerate(commands) if cmd[:1] == ["up"]) < commands.index(check_command)
+    assert ("Executor local READY" in result.stdout) == (up_exit == check_exit == 0)

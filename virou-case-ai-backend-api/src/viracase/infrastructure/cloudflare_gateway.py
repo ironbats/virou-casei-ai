@@ -2,30 +2,39 @@ import base64
 import json
 import mimetypes
 import re
+import time
 from hashlib import sha256
 
 import httpx
 
 from viracase.domain.rules import RuleError
+from viracase.infrastructure.publication_logging import emit, exception_fields
 
 
 class PublicationUncertain(RuleError):
-    def __init__(self):
+    def __init__(self, diagnostic=None):
         super().__init__(
             "PUBLICATION_RESULT_UNKNOWN", "Verificando resultado da publicação. Não repita o envio."
         )
+        if diagnostic:
+            self.provider_diagnostic = diagnostic
 
 
 class CloudflareGateway:
-    def __init__(self, policy, token, transport=None):
+    def __init__(self, policy, token, transport=None, *, clock=None, sleep=None):
         self.policy, self.token, self.transport = policy, token, transport
         self.account_path = "/accounts/" + policy["account_id"]
         self.before_request = None
+        self.verification_observer = None
+        self.clock, self.sleep = clock or time.monotonic, sleep or time.sleep
 
     def request(self, method, path, **kwargs):
         if self.before_request:
             self.before_request(method)
         headers = kwargs.pop("headers", {"Authorization": "Bearer " + self.token})
+        route = self._route_label(path)
+        started, status, error_codes, ray = time.monotonic(), None, [], None
+        completed = False
         try:
             with httpx.Client(
                 transport=self.transport, timeout=self.policy["timeout_seconds"], follow_redirects=False
@@ -33,39 +42,89 @@ class CloudflareGateway:
                 response = client.request(
                     method, "https://api.cloudflare.com/client/v4" + path, headers=headers, **kwargs
                 )
-            if response.status_code == 404 and method == "GET":
+            status = response.status_code
+            ray_value = response.headers.get("cf-ray", "")
+            ray = ray_value if re.fullmatch(r"[a-fA-F0-9]{8,32}(?:-[A-Z]{3})?", ray_value) else None
+            try:
+                envelope = response.json()
+                if isinstance(envelope, dict) and isinstance(envelope.get("errors"), list):
+                    error_codes = [
+                        e["code"] for e in envelope["errors"][:10]
+                        if isinstance(e, dict) and type(e.get("code")) is int
+                    ]
+            except ValueError:
+                envelope = None
+            if status == 404 and method == "GET":
+                completed = True
                 return None
-            if response.status_code >= 500:
+            if status >= 500:
                 if method != "GET":
                     raise PublicationUncertain()
-                raise RuleError(
-                    "DEPENDENCY_UNAVAILABLE", "Cloudflare indisponível. Tente validar novamente.", 503
-                )
-            if response.status_code == 429:
-                raise RuleError(
-                    "QUOTA_EXCEEDED",
-                    "A Cloudflare limitou as requisições. Aguarde antes de tentar novamente.",
-                    429,
-                )
-            if response.status_code in {401, 403}:
-                raise RuleError(
-                    "CONFIGURATION_INVALID", "Token inválido ou sem permissão para a conta/operação.", 409
-                )
-            value = response.json()
-            if not response.is_success or not value.get("success"):
-                raise RuleError(
-                    "PUBLICATION_REJECTED",
-                    "A Cloudflare recusou a operação. Revise as permissões e o perfil no backoffice.",
-                )
-            return value.get("result")
-        except (httpx.TimeoutException, httpx.NetworkError):
-            if method != "GET":
-                raise PublicationUncertain() from None
-            raise RuleError(
+                raise RuleError("DEPENDENCY_UNAVAILABLE", "Cloudflare indisponível. Tente validar novamente.", 503)
+            if status == 429:
+                raise RuleError("QUOTA_EXCEEDED", "A Cloudflare limitou as requisições. Aguarde antes de tentar novamente.", 429)
+            if status in {401, 403}:
+                raise RuleError("CONFIGURATION_INVALID", "Token inválido ou sem permissão para a conta/operação.", 409)
+            if not isinstance(envelope, dict):
+                raise ValueError("invalid_response_envelope")
+            if not response.is_success or not envelope.get("success"):
+                raise RuleError("PUBLICATION_REJECTED", "A Cloudflare recusou a operação. Revise as permissões e o perfil no backoffice.")
+            completed = True
+            return envelope.get("result")
+        except RuleError as exc:
+            exc.provider_diagnostic = {
+                "method": method, "route": route, "status": status,
+                "provider_error_codes": error_codes, "cf_ray": ray,
+            }
+            emit("cloudflare_request_failed", "error", method=method, route=route, status=status,
+                 provider_error_codes=error_codes, cf_ray=ray,
+                 duration_ms=round((time.monotonic() - started) * 1000), **exception_fields(exc))
+            raise
+        except (httpx.TimeoutException, httpx.NetworkError, httpx.RemoteProtocolError) as exc:
+            emit("cloudflare_transport_failed", "error", method=method, route=route, status=status,
+                 duration_ms=round((time.monotonic() - started) * 1000), **exception_fields(exc))
+            failure = PublicationUncertain() if method != "GET" else RuleError(
                 "DEPENDENCY_UNAVAILABLE", "Não foi possível consultar a Cloudflare.", 503
-            ) from None
-        except (ValueError, KeyError, TypeError):
-            raise RuleError("DEPENDENCY_UNAVAILABLE", "Resposta inválida da Cloudflare.", 503) from None
+            )
+            failure.provider_diagnostic = {
+                "method": method, "route": route, "status": status,
+                "provider_error_codes": error_codes, "cf_ray": ray,
+                "transport_error": type(exc).__name__,
+            }
+            raise failure from None
+        except (ValueError, KeyError, TypeError) as exc:
+            emit("cloudflare_response_invalid", "error", method=method, route=route, status=status,
+                 duration_ms=round((time.monotonic() - started) * 1000), **exception_fields(exc))
+            failure = PublicationUncertain() if method != "GET" else RuleError(
+                "DEPENDENCY_UNAVAILABLE", "Resposta inválida da Cloudflare.", 503
+            )
+            failure.provider_diagnostic = {
+                "method": method, "route": route, "status": status,
+                "provider_error_codes": error_codes, "cf_ray": ray,
+                "response_error": type(exc).__name__,
+            }
+            raise failure from None
+        finally:
+            if completed:
+                emit("cloudflare_request_completed", method=method, route=route, status=status, cf_ray=ray,
+                     duration_ms=round((time.monotonic() - started) * 1000))
+
+    @staticmethod
+    def _route_label(path):
+        path = path.split("?", 1)[0]
+        path = re.sub(r"/accounts/[^/]+", "/accounts/{account}", path)
+        path = re.sub(r"/workers/scripts/[^/]+", "/workers/scripts/{worker}", path)
+        path = re.sub(r"/d1/database/[^/]+", "/d1/database/{database}", path)
+        known = {
+            "/user/tokens/verify", "/accounts/{account}", "/accounts/{account}/tokens/verify",
+            "/accounts/{account}/workers/scripts", "/accounts/{account}/workers/subdomain",
+            "/accounts/{account}/d1/database", "/accounts/{account}/d1/database/{database}",
+            "/accounts/{account}/d1/database/{database}/query", "/accounts/{account}/workers/assets/upload",
+        }
+        suffixes = {"", "/deployments", "/assets-upload-session", "/settings", "/subdomain"}
+        if path in known or any(path == "/accounts/{account}/workers/scripts/{worker}" + suffix for suffix in suffixes):
+            return path
+        return "cloudflare_api"
 
     def validate(self):
         try:
@@ -125,6 +184,14 @@ class CloudflareGateway:
         return result
 
     def upload(self, name, database_id, artifact):
+        deployments_path = self.account_path + "/workers/scripts/" + name + "/deployments"
+        before = self.request("GET", deployments_path)
+        if before is not None and not isinstance(before, dict):
+            raise RuleError("DEPENDENCY_UNAVAILABLE", "A Cloudflare retornou um inventário de deployments inválido.", 503)
+        prior = (before or {}).get("deployments", [])
+        if not isinstance(prior, list):
+            raise RuleError("DEPENDENCY_UNAVAILABLE", "A Cloudflare retornou um inventário de deployments inválido.", 503)
+        prior_ids = {item.get("id") for item in prior if isinstance(item, dict)}
         manifest, contents = {}, {}
         for path, content in artifact["assets"].items():
             encoded = base64.b64encode(content.encode()).decode()
@@ -151,7 +218,7 @@ class CloudflareGateway:
             "compatibility_date": self.policy["compatibility_date"],
             "compatibility_flags": artifact["compatibility_flags"],
             "bindings": [
-                {"type": "d1", "name": "DB", "id": database_id},
+                {"type": "d1", "name": "DB", "database_id": database_id},
                 {"type": "assets", "name": "ASSETS"},
             ],
             "assets": {
@@ -176,10 +243,77 @@ class CloudflareGateway:
                 for name, data in artifact["modules"].items()
             }
         )
-        result = self.request("PUT", self.account_path + "/workers/scripts/" + name, files=files)
-        if not result or not result.get("deployment_id"):
-            raise PublicationUncertain()
-        return result["deployment_id"]
+        timeout = httpx.Timeout(self.policy["timeout_seconds"], read=120)
+        uncertainty = None
+        try:
+            result = self.request("PUT", self.account_path + "/workers/scripts/" + name, files=files, timeout=timeout)
+        except PublicationUncertain as exc:
+            uncertainty, result = exc, None
+        if isinstance(result, dict) and result.get("id") and result["id"] != name:
+            raise PublicationUncertain({"code": "UPLOAD_SCRIPT_MISMATCH"})
+        if not isinstance(result, dict):
+            return self._confirm_upload(name, database_id, artifact["revision_id"], prior_ids, uncertainty)
+        if isinstance(result.get("deployment_id"), str) and re.fullmatch(
+            r"[a-fA-F0-9]{8}-(?:[a-fA-F0-9]{4}-){3}[a-fA-F0-9]{12}", result["deployment_id"]
+        ):
+            return result["deployment_id"]
+        return self._confirm_upload(name, database_id, artifact["revision_id"], prior_ids)
+
+    def _confirm_upload(self, name, database_id, revision, prior_ids, uncertainty=None):
+        from viracase.infrastructure.publication_verification import binding_observation
+
+        started = self.clock()
+        deadline = started + max(30, min(90, self.policy["timeout_seconds"] * 3))
+        path = self.account_path + "/workers/scripts/" + name
+        observations = []
+        for attempt in range(1, 13):
+            remaining = deadline - self.clock()
+            if remaining <= 0:
+                break
+            item = {"attempt": attempt, "confirmed": False, "code": "DEPLOYMENT_NOT_VISIBLE"}
+            retryable = True
+            try:
+                after = self.request("GET", path + "/deployments", timeout=min(self.policy["timeout_seconds"], remaining))
+                if after is not None and (not isinstance(after, dict) or not isinstance(after.get("deployments"), list)):
+                    item["code"], retryable = "DEPLOYMENTS_RESPONSE_INVALID", False
+                else:
+                    recent = [
+                        deployment for deployment in (after or {}).get("deployments", [])
+                        if isinstance(deployment, dict)
+                        and isinstance(deployment.get("id"), str)
+                        and re.fullmatch(r"[a-fA-F0-9]{8}-(?:[a-fA-F0-9]{4}-){3}[a-fA-F0-9]{12}", deployment["id"])
+                        and deployment["id"] not in prior_ids
+                    ]
+                    item["new_deployments"] = len(recent)
+                    if len(recent) > 1:
+                        item["code"], retryable = "DEPLOYMENTS_AMBIGUOUS", False
+                    elif len(recent) == 1 and self.clock() < deadline:
+                        settings = self.request("GET", path + "/settings", timeout=min(self.policy["timeout_seconds"], deadline - self.clock()))
+                        bindings = binding_observation(settings, database_id, revision)
+                        item.update(code=bindings["code"], confirmed=bindings["passed"])
+                        retryable = bindings["retryable"]
+                        if bindings["passed"]:
+                            emit("cloudflare_upload_confirmed", attempt=attempt,
+                                 recovered=uncertainty is not None,
+                                 duration_ms=round((self.clock() - started) * 1000))
+                            return recent[0]["id"]
+            except RuleError as exc:
+                item["code"] = exc.code
+                retryable = exc.code == "DEPENDENCY_UNAVAILABLE"
+                if exc.code in {"LEASE_LOST", "VERSION_CONFLICT", "FORBIDDEN"}:
+                    raise
+            observations.append(item)
+            emit("cloudflare_upload_observed", **item)
+            delay = min(2 ** (attempt - 1), 8)
+            if not retryable or attempt == 12 or self.clock() + delay >= deadline:
+                break
+            self.sleep(delay)
+        diagnostic = dict(getattr(uncertainty, "provider_diagnostic", {}) or {})
+        diagnostic["upload_confirmation"] = {
+            "confirmed": False, "attempts": observations,
+            "duration_ms": round((self.clock() - started) * 1000),
+        }
+        raise PublicationUncertain(diagnostic)
 
     def enable(self, name, enabled=True):
         return self.request(
@@ -199,25 +333,9 @@ class CloudflareGateway:
             self.request("DELETE", path)
 
     def verify(self, url, revision):
-        with httpx.Client(
-            transport=self.transport, timeout=self.policy["timeout_seconds"], follow_redirects=False
-        ) as client:
-            page = client.get(url)
-            health = client.get(url + "/api/__viroucaseai_revision")
-            api = client.get(url + "/api/health")
-        try:
-            if page.status_code != 200 or "text/html" not in page.headers.get("content-type", ""):
-                raise ValueError()
-            if (
-                health.status_code != 200
-                or health.json().get("revision_id") != revision
-                or not health.json().get("database")
-            ):
-                raise ValueError()
-            if api.status_code != 200 or "application/json" not in api.headers.get("content-type", ""):
-                raise ValueError()
-        except (ValueError, TypeError):
-            raise RuleError(
-                "PUBLICATION_VERIFICATION_FAILED",
-                "Upload concluído, mas frontend, API ou D1 ainda não passaram na verificação externa.",
-            ) from None
+        from viracase.infrastructure.publication_verification import RemoteVerifier
+
+        return RemoteVerifier(
+            self.policy["timeout_seconds"], self.transport, self.before_request,
+            self.verification_observer,
+        ).verify(url, revision)
