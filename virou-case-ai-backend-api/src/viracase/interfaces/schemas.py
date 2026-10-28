@@ -129,3 +129,7 @@ class BackupEvidence(Input):
         str, StringConstraints(strip_whitespace=True, min_length=10, max_length=300)
     ]
     reason: Reason
+
+
+class ProjectDeletionInput(Input):
+    confirmation: str = Field(min_length=1, max_length=100)

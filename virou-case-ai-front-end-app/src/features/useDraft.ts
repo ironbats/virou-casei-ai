@@ -6,6 +6,7 @@ export function useDraft<T>(
   path: string,
   payload: (data: T) => unknown,
   merge?: (local: T, saved: T, remote: T) => T | null,
+  debounceMs = 700,
 ) {
   const [data, render] = useState<T | null>(null),
     [status, setStatus] = useState("Carregando rascunho…"),
@@ -133,7 +134,7 @@ export function useDraft<T>(
       JSON.stringify(serialize.current(data)) === saved.current
     )
       return;
-    const timer = setTimeout(() => void flush().catch(() => {}), 700);
+    const timer = setTimeout(() => void flush().catch(() => {}), debounceMs);
     return () => clearTimeout(timer);
   }, [data]);
   useEffect(() => {

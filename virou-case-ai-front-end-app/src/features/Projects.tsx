@@ -1,5 +1,5 @@
-import { useState, type FormEvent } from "react";
-import { ArrowRight, FileCode2, Lightbulb, Plus } from "lucide-react";
+import { useEffect, useState, type FormEvent } from "react";
+import { ArrowRight, FileCode2, Lightbulb, Plus, Trash2 } from "lucide-react";
 import { Link, useNavigate } from "react-router-dom";
 import { api, command } from "../shared/api";
 import { ErrorNotice, Loading, Modal, useLoad } from "../shared/ui";
@@ -16,6 +16,31 @@ export function Projects() {
   const [busy, setBusy] = useState(false),
     [formError, setFormError] = useState<unknown>(null),
     navigate = useNavigate();
+  const [deleting, setDeleting] = useState<Project | null>(null);
+  const [confirmation, setConfirmation] = useState("");
+  const [notice, setNotice] = useState("");
+  useEffect(() => {
+    if (!data?.items.some((p) => p.state === "deleting")) return;
+    const timer = window.setInterval(reload, 3000);
+    return () => window.clearInterval(timer);
+  }, [data?.items.some((p) => p.state === "deleting")]);
+  async function remove(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!deleting || busy || confirmation !== deleting.name) return;
+    setBusy(true);
+    setFormError(null);
+    try {
+      await command(`/projects/${deleting.id}`, { confirmation }, "DELETE", deleting.version);
+      setDeleting(null);
+      setConfirmation("");
+      setNotice("Exclusão solicitada. A vaga será liberada após a remoção dos arquivos e recursos publicados.");
+      reload();
+    } catch (e) {
+      setFormError(e);
+    } finally {
+      setBusy(false);
+    }
+  }
   async function create(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (busy) return;
@@ -52,11 +77,12 @@ export function Projects() {
             Novo projeto
           </button>
           <p className="small muted align-right">
-            {data?.quota.used_projects ?? "—"} de 2 projetos
+            {data?.quota.used_projects ?? "—"} de {data?.quota.max_projects ?? "—"} projetos
           </p>
         </div>
       </div>
       <ErrorNotice error={error} />
+      {notice && <p className="notice success" role="status">{notice}</p>}
       {error ? (
         <button className="button" onClick={reload}>
           Consultar novamente
@@ -75,7 +101,7 @@ export function Projects() {
                 <div className="project-card-body">
                   <div className="card-title">
                     <h2>{p.name}</h2>
-                    <span className="badge">Rascunho</span>
+                    <span className="badge">{p.state === "deleting" ? "Exclusão pendente" : "Rascunho"}</span>
                   </div>
                   <p>{p.objective}</p>
                   <span className="stack-label">
@@ -83,12 +109,18 @@ export function Projects() {
                       ? "Hono · TypeScript · D1"
                       : "FastAPI · Python · D1"}
                   </span>
-                  <Link
+                  {p.state !== "deleting" && <Link
                     className="button primary full"
                     to={"/app/projetos/" + p.id}
                   >
                     Continuar projeto <ArrowRight size={18} />
-                  </Link>
+                  </Link>}
+                  {p.state === "deleting" && <p className="small" role="status">A exclusão está pendente. Se houve falha, retome a remoção abaixo. O histórico de consumo será preservado.</p>}
+                  <button className="button danger full project-delete" onClick={() => {
+                    setDeleting(p); setConfirmation(""); setFormError(null);
+                  }} aria-label={`${p.state === "deleting" ? "Retomar exclusão de" : "Excluir projeto"} ${p.name}`}>
+                    <Trash2 size={16} />{p.state === "deleting" ? "Retomar exclusão" : "Excluir projeto"}
+                  </button>
                 </div>
               </article>
             ))}
@@ -123,6 +155,25 @@ export function Projects() {
             </Link>
           </div>
         </>
+      )}
+      {deleting && (
+        <Modal title="Excluir projeto" close={() => !busy && setDeleting(null)}>
+          <form className="form" onSubmit={remove}>
+            <p>Excluir <strong>{deleting.name}</strong> remove os arquivos, rascunhos, publicação e banco de dados hospedado deste projeto. Essa ação não pode ser desfeita. O histórico de consumo permanece disponível.</p>
+            <p>Baixe uma cópia do projeto antes de continuar, se precisar conservar o código.</p>
+            <label>Digite o nome do projeto para confirmar
+              <input autoFocus value={confirmation} maxLength={100} autoComplete="off" disabled={busy}
+                onChange={(e) => setConfirmation(e.target.value)} />
+            </label>
+            <ErrorNotice error={formError} />
+            <div className="actions">
+              <button type="button" className="button" disabled={busy} onClick={() => setDeleting(null)}>Cancelar</button>
+              <button className="button danger" disabled={busy || confirmation !== deleting.name}>
+                <Trash2 size={16} />{busy ? "Solicitando…" : "Confirmar exclusão"}
+              </button>
+            </div>
+          </form>
+        </Modal>
       )}
       {creating && (
         <Modal title="Uma nova ideia" close={() => !busy && setCreating(false)}>

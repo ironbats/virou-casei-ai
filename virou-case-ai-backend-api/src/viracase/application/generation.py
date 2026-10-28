@@ -1,5 +1,6 @@
 import json
 import re
+
 from viracase.domain.rules import RuleError
 
 
@@ -81,7 +82,11 @@ class GenerationService:
         self.repository, self.catalog = repository, catalog
 
     def start(self, actor, project_id, key, payload, contract_version=2):
-        previous = self.repository.recover_intention(actor, f"generation:{project_id}", key, payload)
+        from viracase.infrastructure.guided_build import attachment_context
+
+        command = f"guided-send:{project_id}" if payload.get("guided_request") else f"generation:{project_id}"
+        intention = payload.get("guided_request", payload)
+        previous = self.repository.recover_intention(actor, command, key, intention)
         if previous is not None:
             return self.repository.operation(actor, previous["id"])
         self.repository.rate_limit("generation:" + actor, 20, 3600)
@@ -93,14 +98,15 @@ class GenerationService:
             if project["current_revision_id"]
             else {}
         )
-        prompt = generation_prompt(project, payload["brief"], files)
+        prompt = generation_prompt(project, attachment_context(payload), files)
         policy, ceiling = self.catalog.resolve(prompt)
         if contract_version in {3, 4}:
             from decimal import Decimal
+
             from viracase.application.conversation import INPUT_BOUND, MAX_BATCHES, prompt_for
             from viracase.domain.rules import cost, money
 
-            prompt_for(project, payload["brief"], files)
+            prompt_for(project, attachment_context(payload), files)
             # Reserve the worst bounded envelope before any provider call; release unused capacity.
             ceiling = money(
                 cost(

@@ -1,6 +1,7 @@
 from datetime import datetime
 from decimal import Decimal
 from uuid import uuid4
+
 from sqlalchemy import (
     JSON,
     Boolean,
@@ -16,6 +17,7 @@ from sqlalchemy import (
     UniqueConstraint,
 )
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
+
 from viracase.domain.rules import utcnow
 
 
@@ -287,3 +289,105 @@ class PurgeInventory(Base):
     state: Mapped[str] = mapped_column(String(24), default="pending")
     evidence: Mapped[dict] = mapped_column(JSON, default=dict)
     __table_args__ = (UniqueConstraint("account_id", "fence", "destination"),)
+
+
+class IntegrationConfig(Base):
+    __tablename__ = "integration_configs"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    provider: Mapped[str] = mapped_column(String(24), index=True)
+    version: Mapped[int] = mapped_column(Integer)
+    state: Mapped[str] = mapped_column(String(16), default="draft")
+    settings: Mapped[dict] = mapped_column(JSON)
+    credential: Mapped[str | None] = mapped_column(Text)
+    validation: Mapped[dict] = mapped_column(JSON, default=dict)
+    created_by: Mapped[str] = mapped_column(ForeignKey("accounts.id"))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    validated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    __table_args__ = (UniqueConstraint("provider", "version"),)
+
+
+class IntegrationConnection(Base):
+    __tablename__ = "integration_connections"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    provider: Mapped[str] = mapped_column(String(24), index=True)
+    name: Mapped[str] = mapped_column(String(80))
+    name_key: Mapped[str] = mapped_column(String(160))
+    default_for: Mapped[str | None] = mapped_column(String(24), unique=True)
+    created_by: Mapped[str] = mapped_column(ForeignKey("accounts.id"))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    __table_args__ = (
+        UniqueConstraint("provider", "name_key"),
+        CheckConstraint("default_for IS NULL OR default_for = provider"),
+    )
+
+
+class IntegrationVersionBinding(Base):
+    __tablename__ = "integration_version_bindings"
+    config_id: Mapped[str] = mapped_column(ForeignKey("integration_configs.id"), primary_key=True)
+    connection_id: Mapped[str] = mapped_column(ForeignKey("integration_connections.id"), index=True)
+
+
+class TemplateVersion(Base):
+    __tablename__ = "template_versions"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    slug: Mapped[str] = mapped_column(String(80), index=True)
+    version: Mapped[int] = mapped_column(Integer)
+    owner_id: Mapped[str | None] = mapped_column(ForeignKey("accounts.id"))
+    available: Mapped[bool] = mapped_column(Boolean, default=True)
+    content: Mapped[dict] = mapped_column(JSON)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    __table_args__ = (UniqueConstraint("slug", "version"),)
+
+
+class RecommendationRun(Base):
+    __tablename__ = "recommendation_runs"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    account_id: Mapped[str] = mapped_column(ForeignKey("accounts.id"), index=True)
+    project_id: Mapped[str] = mapped_column(ForeignKey("projects.id"), index=True)
+    request_key: Mapped[str] = mapped_column(String(120))
+    payload_hash: Mapped[str] = mapped_column(String(64))
+    state: Mapped[str] = mapped_column(String(24))
+    result: Mapped[dict] = mapped_column(JSON, default=dict)
+    telemetry: Mapped[dict] = mapped_column(JSON, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    __table_args__ = (UniqueConstraint("account_id", "project_id", "request_key"),)
+
+
+class PublicationResource(Base):
+    __tablename__ = "publication_resources"
+    project_id: Mapped[str] = mapped_column(ForeignKey("projects.id"), primary_key=True)
+    account_id: Mapped[str] = mapped_column(ForeignKey("accounts.id"), index=True)
+    config_id: Mapped[str] = mapped_column(ForeignKey("integration_configs.id"))
+    remote_account_id: Mapped[str] = mapped_column(String(32))
+    worker_name: Mapped[str] = mapped_column(String(63))
+    database_id: Mapped[str | None] = mapped_column(String(36))
+    inventory: Mapped[dict] = mapped_column(JSON, default=dict)
+    state: Mapped[str] = mapped_column(String(24), default="reserved")
+    __table_args__ = (UniqueConstraint("remote_account_id", "worker_name"),)
+
+
+class RuntimeStatus(Base):
+    __tablename__ = "runtime_status"
+    id: Mapped[str] = mapped_column(String(100), primary_key=True)
+    checked_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    details: Mapped[dict] = mapped_column(JSON, default=dict)
+
+
+class RuntimeEvent(Base):
+    __tablename__ = "runtime_events"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    service: Mapped[str] = mapped_column(String(24))
+    level: Mapped[str] = mapped_column(String(12))
+    account_id: Mapped[str | None] = mapped_column(String(36))
+    project_id: Mapped[str | None] = mapped_column(String(36))
+    correlation_id: Mapped[str] = mapped_column(String(36))
+    stage: Mapped[str] = mapped_column(String(60))
+    state: Mapped[str] = mapped_column(String(24))
+    error_code: Mapped[str | None] = mapped_column(String(60))
+    duration_ms: Mapped[int | None] = mapped_column(Integer)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    __table_args__ = (
+        Index("ix_runtime_events_created", "created_at", "id"),
+        Index("ix_runtime_events_service", "service", "id"),
+        Index("ix_runtime_events_correlation", "correlation_id", "id"),
+    )

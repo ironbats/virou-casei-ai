@@ -1,31 +1,34 @@
-from datetime import timedelta
-from decimal import Decimal
 import json
 import logging
 import signal
-from pathlib import Path
 import threading
-from sqlalchemy import select, delete, update
+from datetime import timedelta
+from decimal import Decimal
+from pathlib import Path
+
+from sqlalchemy import delete, select, update
+
 from viracase.application.generation import generated_files, generation_prompt
 from viracase.application.progress import record_progress
 from viracase.domain.rules import RuleError, aware, cost, utcnow, validate_files
 from viracase.infrastructure.models import (
     Account,
-    Draft,
     Attempt,
+    Draft,
     Idempotency,
     Job,
     Operation,
     Period,
     Project,
+    PublicationResource,
     PurgeInventory,
+    RecommendationRun,
     Revision,
     new_id,
 )
-from viracase.infrastructure.providers import ProviderRejected, ProviderUncertain
 from viracase.infrastructure.provider_errors import report_rejection
+from viracase.infrastructure.providers import ProviderRejected, ProviderUncertain
 from viracase.infrastructure.repository import project_dto
-
 
 log = logging.getLogger("viracase.worker")
 
@@ -50,7 +53,20 @@ class Worker:
                     continue
                 op = db.get(Operation, job.operation_id)
                 attempt = db.scalar(select(Attempt).where(Attempt.operation_id == op.id))
-                if attempt and attempt.state == "confirmed":
+                if op.type == "publication_check" and op.result.get("creation_started"):
+                    op.state, job.state, op.error_code = (
+                        "reconciling",
+                        "reconciling",
+                        "VERIFICATION_CLEANUP_PENDING",
+                    )
+                    op.progress_stage = "verification_cleanup"
+                elif op.type == "publication" and op.result.get("external_effect_pending"):
+                    op.state, job.state, op.progress_stage = (
+                        "reconciling",
+                        "reconciling",
+                        "publication_reconciling",
+                    )
+                elif attempt and attempt.state == "confirmed":
                     self.repo.settle_operation(db, op, attempt.actual_brl or Decimal(0))
                     op.state, job.state, op.error_code = "failed", "done", "PROCESSING_FAILED"
                     op.progress_stage = "failed"
@@ -123,6 +139,18 @@ class Worker:
     def execute(self, oid, token):
         with self.repo.sessions() as db:
             current = db.get(Operation, oid)
+            if current.type == "project_deletion":
+                from viracase.infrastructure.project_deletion import execute_deletion
+
+                return execute_deletion(self, oid, token)
+            if current.type == "publication_check":
+                from viracase.infrastructure.publication_check import execute_check
+
+                return execute_check(self, oid, token)
+            if current.type == "publication":
+                from viracase.infrastructure.publication_worker import execute_publication
+
+                return execute_publication(self, oid, token)
             if current.type == "generation" and current.policy.get("generation_contract_version") in {3, 4}:
                 from viracase.infrastructure.conversation_generation import execute_conversation
 
@@ -339,6 +367,9 @@ class Worker:
     def lifecycle_tick(self):
         if not self.repo.config.lifecycle_enabled:
             return 0
+        from viracase.infrastructure.publication_lifecycle import synchronize_publication_visibility
+
+        synchronize_publication_visibility(self.repo)
         with self.repo.sessions() as db:
             ids = list(
                 db.scalars(
@@ -363,7 +394,7 @@ class Worker:
                     "source_volume",
                     "operational_database",
                     "exports_memory_only",
-                    "cloudflare_not_provisioned",
+                    "cloudflare_resources",
                     "backups_not_managed",
                 ):
                     db.add(PurgeInventory(account_id=aid, fence=a.fence, destination=destination))
@@ -374,6 +405,22 @@ class Worker:
                 self.repo.settle_operation(db, op, Decimal(0))
                 op.state, op.progress_stage = "cancelled", "retention_expired"
                 db.scalar(select(Job).where(Job.operation_id == op.id)).state = "done"
+        from viracase.infrastructure.publication_lifecycle import purge_publications
+
+        with self.repo.sessions() as db:
+            in_flight = db.scalar(
+                select(Job.id)
+                .join(Operation, Operation.id == Job.operation_id)
+                .where(
+                    Operation.account_id == aid,
+                    Operation.type.in_(["publication", "project_deletion"]),
+                    Job.state == "running",
+                )
+                .limit(1)
+            )
+            if in_flight:
+                return
+        cloudflare_evidence = purge_publications(self.repo, aid, fence)
         evidence = self.repo.sources.remove_account(aid)
         with self.repo.sessions.begin() as db:
             a = self.repo.account(db, aid, True)
@@ -382,6 +429,8 @@ class Worker:
             for op in db.scalars(select(Operation).where(Operation.account_id == aid)):
                 op.payload, op.result, op.project_id = {}, {}, None
             db.flush()
+            db.execute(delete(RecommendationRun).where(RecommendationRun.account_id == aid))
+            db.execute(delete(PublicationResource).where(PublicationResource.account_id == aid))
             db.execute(delete(Draft).where(Draft.account_id == aid))
             db.execute(delete(Revision).where(Revision.account_id == aid))
             db.execute(delete(Project).where(Project.account_id == aid))
@@ -393,6 +442,8 @@ class Worker:
             for record in records:
                 if record.destination == "source_volume":
                     record.state, record.evidence = "confirmed", evidence
+                elif record.destination == "cloudflare_resources":
+                    record.state, record.evidence = "confirmed", cloudflare_evidence
                 elif record.destination == "backups_not_managed":
                     record.state, record.evidence = (
                         "requires_operator_evidence",
@@ -401,7 +452,7 @@ class Worker:
                 else:
                     record.state, record.evidence = (
                         "confirmed",
-                        {"checked_at": utcnow().isoformat(), "external_publication_enabled": False},
+                        {"checked_at": utcnow().isoformat(), "local_cleanup_confirmed": True},
                     )
             a.lifecycle = "reconciling"
 
@@ -414,6 +465,9 @@ def main():
     signal.signal(signal.SIGTERM, lambda *_: stop.set())
     signal.signal(signal.SIGINT, lambda *_: stop.set())
     worker = Worker(repo, gateway, catalog)
+    from viracase.infrastructure.runtime_monitor import start_monitor
+
+    monitor = start_monitor(repo, stop)
     logging.basicConfig(level=logging.INFO, format="%(message)s")
     while not stop.is_set():
         try:
@@ -424,6 +478,7 @@ def main():
         except Exception as exc:
             log.error(json.dumps({"event": "worker_loop_failure", "exception_type": type(exc).__name__}))
             stop.wait(5)
+    monitor.join(timeout=10)
     engine.dispose()
 
 

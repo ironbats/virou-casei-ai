@@ -1,5 +1,9 @@
 FROM python:3.12-slim
 ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1
+RUN apt-get update && apt-get install -y --no-install-recommends bubblewrap nodejs npm && rm -rf /var/lib/apt/lists/*
+COPY build-toolchain /opt/viracase-build
+RUN cd /opt/viracase-build && npm ci --ignore-scripts && node node_modules/esbuild/install.js
+RUN pip install --no-cache-dir workers-py==1.17.9 uv==0.13.4 && python /opt/viracase-build/vendor-python.py
 WORKDIR /app
 COPY requirements.lock pyproject.toml ./
 RUN pip install --no-cache-dir -r requirements.lock

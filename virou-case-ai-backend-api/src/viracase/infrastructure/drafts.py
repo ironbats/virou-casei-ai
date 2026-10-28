@@ -1,7 +1,10 @@
 """Drafts are account-owned working copies, never canonical revisions or AI jobs."""
 
 import re
+
 from sqlalchemy import select, update
+
+from viracase.application.progress import record_progress
 from viracase.domain.rules import RuleError, utcnow, validate_file_entries
 from viracase.infrastructure.models import Draft, Operation
 
@@ -28,7 +31,12 @@ class Drafts:
         self.repo.access(db, a, "learn" if kind == "learning" else "write" if writing else "read")
         if kind == "project":
             return self.repo.owned_project(db, actor, target)
-        self.learning.get(target)
+        self.learning_guide(db, actor, target)
+
+    def learning_guide(self, db, actor, target):
+        from viracase.infrastructure.template_catalog import TemplateCatalog
+
+        return TemplateCatalog(self.repo, self.learning).guide(db, actor, target)
 
     def initial(self, kind, target, project=None):
         if kind == "learning":
@@ -41,9 +49,14 @@ class Drafts:
         }
 
     def get(self, actor, kind, target):
-        with self.repo.sessions() as db:
+        with self.repo.sessions.begin() as db:
             project = self.authorize(db, actor, kind, target)
-            return dto(self.row(db, actor, kind, target), self.initial(kind, target, project))
+            initial = (
+                {"guide": self.learning_guide(db, actor, target), "fields": {}, "prompt": "", "manual": False}
+                if kind == "learning"
+                else self.initial(kind, target, project)
+            )
+            return dto(self.row(db, actor, kind, target), initial)
 
     def write(self, db, actor, kind, target, version, data):
         row = self.row(db, actor, kind, target)
@@ -75,7 +88,7 @@ class Drafts:
                     validate_file_entries(data["files"], self.repo.sources.secrets)
                 saved = {**data, "provenance": row.data.get("provenance", []) if row else []}
             else:
-                guide = row.data["guide"] if row else self.learning.get(target)
+                guide = row.data["guide"] if row else self.learning_guide(db, actor, target)
                 valid = {f["key"]: f for f in guide["fields"]}
                 if any(k not in valid or len(v) > valid[k]["max_length"] for k, v in data["fields"].items()):
                     raise RuleError("VALIDATION_ERROR", "Campo fora dos limites do guia.", 400)
@@ -145,7 +158,12 @@ class Drafts:
                     Operation.type == "generation",
                 )
             )
-            if not op or op.state != "succeeded" or not op.result.get("candidate"):
+            if (
+                not op
+                or op.state != "succeeded"
+                or not op.result.get("candidate")
+                or op.result.get("discarded_at")
+            ):
                 raise RuleError("NOT_FOUND", "Proposta indisponível.", 404)
             if p.version != version or p.current_revision_id != op.payload.get("base_revision_id"):
                 raise RuleError(
@@ -157,6 +175,7 @@ class Drafts:
             # Accept this immutable revision; no duplicate revision or additional quota consumed.
             p.current_revision_id, p.version, r.candidate = r.id, p.version + 1, False
             op.result = {**op.result, "applied_revision_id": r.id}
+            record_progress(op, "changes_applied")
             return {"revision_id": r.id}
 
         return self.repo.mutate(actor, f"apply:{oid}", key, {"version": version}, command, "write")

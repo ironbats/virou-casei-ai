@@ -4,6 +4,9 @@ cd "$(dirname "${BASH_SOURCE[0]}")/.."
 command -v docker >/dev/null || { echo "Docker é necessário." >&2; exit 1; }
 docker compose version >/dev/null
 docker info >/dev/null
+if [[ -z "${COMPOSE_FILE:-}" ]] && grep -q '^viracase-publication ' /sys/kernel/security/apparmor/profiles 2>/dev/null; then
+  export COMPOSE_FILE=compose.yaml:compose.publication-apparmor.yaml
+fi
 if [[ ! -f .env ]]; then
   cp .env.example .env
   chmod 600 .env

@@ -1,11 +1,13 @@
+import json
+import os
 from datetime import timedelta
 from decimal import Decimal
 from pathlib import Path
-import json
-import os
+
 import pytest
 from sqlalchemy import create_engine, text
 from sqlalchemy.engine import make_url
+
 from viracase.domain.rules import Access, utcnow
 from viracase.infrastructure.config import Settings
 from viracase.infrastructure.database import database
@@ -34,7 +36,7 @@ def system(tmp_path):
     Base.metadata.create_all(engine)
     with engine.begin() as connection:
         connection.execute(text("CREATE TABLE alembic_version (version_num VARCHAR(32) PRIMARY KEY)"))
-        connection.execute(text("INSERT INTO alembic_version VALUES ('0003')"))
+        connection.execute(text("INSERT INTO alembic_version VALUES ('0006')"))
     policy = {
         "provider": "openai",
         "model": "gpt-6-luna",

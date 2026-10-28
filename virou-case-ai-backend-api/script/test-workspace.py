@@ -52,7 +52,17 @@ try:
         else:
             raise RuntimeError(f"Serviço de teste {port} não ficou pronto.")
     result = subprocess.run(
-        ["npx", "playwright", "test", "tests/workspace.spec.ts", "tests/preview.spec.ts", *extra], cwd=frontend, env=environment
+        [
+            "npx",
+            "playwright",
+            "test",
+            "tests/guided.spec.ts",
+            "tests/workspace.spec.ts",
+            "tests/preview.spec.ts",
+            *extra,
+        ],
+        cwd=frontend,
+        env=environment,
     )
     raise SystemExit(result.returncode)
 finally:

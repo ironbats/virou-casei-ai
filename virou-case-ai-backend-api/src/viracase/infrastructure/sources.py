@@ -63,6 +63,12 @@ class SourceStore:
             raise RuleError("SOURCE_INTEGRITY_FAILED", "A integridade da revisão não foi confirmada.", 503)
         return files
 
+    def remove_project(self, account, project):
+        path = self.path(account, project, project).parent
+        if path.exists():
+            shutil.rmtree(path)
+        return {"source_absent": not path.exists()}
+
     def remove_account(self, account):
         UUID(account)
         path = self.root / account

@@ -10,3 +10,7 @@ __pycache__
 build
 **/__pycache__
 **/*.py[cod]
+**/node_modules
+**/.venv-workers
+**/python_modules
+**/python-vendor.json

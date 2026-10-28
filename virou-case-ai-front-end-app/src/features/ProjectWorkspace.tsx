@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type FormEvent } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   BookOpen,
   Code2,
@@ -7,13 +7,11 @@ import {
   History,
   MessageSquare,
   Save,
-  Send,
-  Upload,
 } from "lucide-react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { useSession } from "../app/session";
 import { api, ApiError, command } from "../shared/api";
-import { ErrorNotice, Loading, Modal } from "../shared/ui";
+import { ErrorNotice, Loading } from "../shared/ui";
 import type {
   Capabilities,
   Operation,
@@ -21,11 +19,13 @@ import type {
   ProjectDraft,
   Revision,
 } from "../shared/types";
+import { GuidedBuildPanel } from "./GuidedBuildPanel";
+import { PublicationControl } from "./PublicationControl";
 import { BuildConversation } from "./BuildConversation";
 import { useProjectOperations, inProgress } from "./useProjectOperations";
 import { useDraft } from "./useDraft";
 import { mergeProjectDraft } from "./mergeProjectDraft";
-import { DraftConflict } from "./DraftConflict";
+import { WorkspaceDialogs } from "./WorkspaceDialogs";
 import { ProjectPreview } from "./ProjectPreview";
 import { lazy, Suspense, type ComponentProps } from "react";
 const Editor = lazy(() =>
@@ -76,7 +76,7 @@ export function ProjectWorkspace() {
     [busy, setBusy] = useState(false),
     [error, setError] = useState<unknown>(null),
     [message, setMessage] = useState(""),
-    [sending, setSending] = useState(""),
+    [reuseRequest, setReuseRequest] = useState<string | null>(null),
     [replyTo, setReplyTo] = useState<string | null>(null),
     [newFile, setNewFile] = useState(false),
     [editing, setEditing] = useState(false),
@@ -89,6 +89,7 @@ export function ProjectWorkspace() {
       project: Project;
       files: Record<string, string>;
     } | null>(null);
+  const buildFlush = useRef<() => Promise<void>>(async () => {});
   const input = useRef<HTMLTextAreaElement>(null),
     tracking = useProjectOperations(pid);
   const canWrite = !!user?.access.allowed_actions.includes("write"),
@@ -236,13 +237,14 @@ export function ProjectWorkspace() {
       event.stopPropagation();
       void draft
         .flush()
+        .then(() => buildFlush.current())
         .then(() => navigate(anchor.pathname + anchor.search))
         .catch(setError);
     };
     document.addEventListener("click", guard, true);
     return () => document.removeEventListener("click", guard, true);
   }, [draft.flush, navigate]);
-  async function act(fn: () => Promise<void>) {
+  async function act(fn: () => Promise<unknown>) {
     if (busy) return;
     setBusy(true);
     setError(null);
@@ -280,47 +282,7 @@ export function ProjectWorkspace() {
     }));
     await draft.flush();
     setMessage("Revisão salva.");
-  }
-  async function generate(event: FormEvent) {
-    event.preventDefault();
-    if (!draft.data || !caps || busy || active) return;
-    const request = draft.data.prompt.trim();
-    if (
-      !canWrite ||
-      !caps.generation.enabled ||
-      request.length < 1 ||
-      draft.data.prompt.length > caps.limits.max_prompt_chars ||
-      tracking.loading ||
-      tracking.error
-    )
-      return;
-    setSending(request);
-    await act(async () => {
-      if (dirty) await save();
-      await draft.flush();
-      const current = await api<Project>(`/projects/${pid}`);
-      draft.setData((d) => ({
-        ...d,
-        prompt: d.prompt.trim() === request ? "" : d.prompt,
-      }));
-      await draft.flush();
-      try {
-        const op = await command<Operation>(`/projects/${pid}/conversation`, {
-          brief: request,
-          base_revision_id: current.current_revision_id,
-          policy_version: caps.policy_version,
-          auto_apply: true,
-          reply_to: replyTo,
-        });
-        setReplyTo(null);
-        tracking.accept(op);
-        tracking.refresh();
-      } catch (failure) {
-        draft.setData((d) => ({ ...d, prompt: d.prompt || request }));
-        throw failure;
-      }
-    });
-    setSending("");
+    return result.revision.id;
   }
   async function inspect(op: Operation) {
     await act(async () => {
@@ -419,21 +381,17 @@ export function ProjectWorkspace() {
             <Download size={16} />
             Baixar projeto
           </button>
-          <button
-            className="button primary"
-            disabled={!caps.publication.enabled}
-            title={caps.publication.reason_code}
-            onClick={() =>
-              void act(async () => {
-                if (dirty) await save();
-                await draft.flush();
-                navigate(`/app/projetos/${pid}/publicar`);
-              })
-            }
-          >
-            <Upload size={16} />
-            Publicar
-          </button>
+          <PublicationControl
+            pid={pid}
+            revision={project.current_revision_id}
+            dirty={dirty}
+            busy={busy}
+            operations={tracking.items}
+            onAccepted={(op) => {
+              tracking.accept(op);
+              tracking.refresh();
+            }}
+          />
         </div>
       </div>
       <ErrorNotice error={error || draft.error} />
@@ -595,40 +553,82 @@ export function ProjectWorkspace() {
               </button>
             </div>
           )}
-          <BuildConversation
-            operations={tracking.items}
+          <GuidedBuildPanel
+            onFlushReady={(fn) => {
+              buildFlush.current = fn;
+            }}
             pid={pid}
-            busy={busy}
-            syncedAt={tracking.syncedAt}
-            loadedRevision={project.current_revision_id}
-            onCancel={(op) =>
-              void act(async () => {
-                tracking.accept(
-                  await command<Operation>(`/operations/${op.id}/cancel`),
-                );
-                tracking.refresh();
-              })
-            }
-            onRetry={(request) => {
-              if (
-                !draft.data!.prompt ||
-                confirm("Substituir o texto do próximo pedido?")
-              ) {
-                draft.setData((d) => ({ ...d, prompt: request }));
-                input.current?.focus();
+            caps={caps}
+            canWrite={canWrite}
+            blocked={blocked || tracking.loading || !!tracking.error}
+            active={!!active}
+            hasHistory={tracking.items.some((o) => o.type === "generation")}
+            pendingProposal={tracking.items.some(
+              (o) =>
+                o.type === "generation" &&
+                o.state === "succeeded" &&
+                o.result_ref.candidate &&
+                !o.result_ref.applied_revision_id &&
+                !o.result_ref.discarded_at,
+            )}
+            reuseRequest={reuseRequest}
+            onReused={() => setReuseRequest(null)}
+            replyTo={replyTo}
+            beforeSend={async () => {
+              setBusy(true);
+              try {
+                const revision = dirty
+                  ? await save()
+                  : project.current_revision_id;
+                await draft.flush();
+                if (!revision)
+                  throw new Error("Salve a revisão antes de enviar.");
+                return revision;
+              } finally {
+                setBusy(false);
               }
             }}
-            onFile={(path) => {
-              setSelected(path);
-              setTab("code");
-              setMobile("code");
+            onAccepted={(op) => {
+              setReplyTo(null);
+              tracking.accept(op);
+              tracking.refresh();
             }}
-            onReview={inspect}
-            onAnswer={(op) => {
-              setReplyTo(op.id);
-              input.current?.focus();
-            }}
-          />
+          >
+            <BuildConversation
+              operations={tracking.items}
+              pid={pid}
+              busy={busy}
+              syncedAt={tracking.syncedAt}
+              loadedRevision={project.current_revision_id}
+              onCancel={(op) =>
+                void act(async () => {
+                  tracking.accept(
+                    await command<Operation>(`/operations/${op.id}/cancel`),
+                  );
+                  tracking.refresh();
+                })
+              }
+              onRetry={(request) => {
+                setReuseRequest(request);
+              }}
+              onFile={(path) => {
+                setSelected(path);
+                setTab("code");
+                setMobile("code");
+              }}
+              onReview={inspect}
+              onDiscard={(op) =>
+                void act(async () => {
+                  await command(`/projects/${pid}/proposals/${op.id}/discard`);
+                  tracking.refresh();
+                })
+              }
+              onAnswer={(op) => {
+                setReplyTo(op.id);
+                input.current?.focus();
+              }}
+            />
+          </GuidedBuildPanel>
           {tracking.cursor && (
             <button
               className="text-button"
@@ -638,96 +638,6 @@ export function ProjectWorkspace() {
               Conversas anteriores
             </button>
           )}
-          {sending && (
-            <div className="build-request" role="status">
-              <strong>Você</strong>
-              <p>{sending}</p>
-              <span className="small">Enviando…</span>
-            </div>
-          )}
-          <form className="chat-composer" onSubmit={generate}>
-            {replyTo && (
-              <div className="notice small">
-                Respondendo à pergunta da conversa.{" "}
-                <button
-                  type="button"
-                  className="text-button"
-                  onClick={() => setReplyTo(null)}
-                >
-                  Iniciar outro pedido
-                </button>
-              </div>
-            )}
-            <label htmlFor="project-prompt">
-              {replyTo ? "Sua resposta" : "O que vamos construir?"}
-            </label>
-            {!!draft.data.provenance?.length && (
-              <span className="small muted">
-                Rascunho preparado com um guia · revise antes de enviar
-              </span>
-            )}
-            <textarea
-              id="project-prompt"
-              ref={input}
-              aria-label="Pedido para a IA"
-              value={draft.data.prompt}
-              aria-invalid={
-                draft.data.prompt.length > caps.limits.max_prompt_chars
-              }
-              rows={4}
-              disabled={!canWrite}
-              placeholder="Descreva o resultado esperado e como verificar…"
-              onChange={(e) =>
-                draft.setData((d) => ({ ...d, prompt: e.target.value }))
-              }
-              onKeyDown={(e) => {
-                if ((e.ctrlKey || e.metaKey) && e.key === "Enter") {
-                  e.preventDefault();
-                  e.currentTarget.form?.requestSubmit();
-                }
-              }}
-            />
-            {dirty && (
-              <p className="small">
-                Suas alterações serão salvas antes de enviar o pedido.
-              </p>
-            )}
-            {draft.data.prompt.length > caps.limits.max_prompt_chars && (
-              <p role="alert">
-                O pedido excede {caps.limits.max_prompt_chars} caracteres.
-                Reduza o texto para salvar e enviar. Seu conteúdo foi preservado
-                nesta tela.
-              </p>
-            )}
-            {!caps.generation.enabled && (
-              <p className="small">
-                A integração de IA precisa ser habilitada pelo operador.
-              </p>
-            )}
-            <button
-              className="button primary full"
-              disabled={
-                blocked ||
-                !!active ||
-                !caps.generation.enabled ||
-                draft.data.prompt.trim().length < 1 ||
-                draft.data.prompt.length > caps.limits.max_prompt_chars ||
-                tracking.loading ||
-                !!tracking.error
-              }
-            >
-              <Send size={16} />
-              {active
-                ? "Construindo…"
-                : sending
-                  ? "Enviando…"
-                  : "Enviar para IA"}
-            </button>
-            <p className="small muted">
-              Ctrl + Enter para enviar. Somente o envio usa IA; rascunhos e
-              guias não consomem créditos.
-            </p>
-          </form>
         </section>
       </div>
       {downloads.length > 0 && (
@@ -743,250 +653,39 @@ export function ProjectWorkspace() {
           ))}
         </div>
       )}
-      {review && (
-        <Modal
-          title="Revise as alterações propostas"
-          close={() => setReview(null)}
-        >
-          <p>
-            Revise o conteúdo antes de aplicar. A revisão atual permanece salva
-            até sua confirmação.
-          </p>
-          {review.op.result_ref.changed_files?.map((f) => (
-            <details key={f.path} open>
-              <summary>
-                {f.path} · {f.change === "created" ? "Criado" : "Alterado"}
-              </summary>
-              <div className="compare-grid">
-                <div>
-                  <h3>Revisão atual</h3>
-                  <pre className="source-preview">
-                    {baseFiles[f.path] ?? "Arquivo novo"}
-                  </pre>
-                </div>
-                <div>
-                  <h3>Proposta</h3>
-                  <pre className="source-preview">{review.files[f.path]}</pre>
-                </div>
-              </div>
-            </details>
-          ))}
-          <p className="small">
-            Estrutura conferida; testes e execução do projeto gerado não foram
-            realizados.
-          </p>
-          {dirty && <p>Salve ou revise seu rascunho antes de aplicar.</p>}
-          <ErrorNotice error={error} />
-          <button
-            className="button primary"
-            disabled={
-              blocked || dirty || !!review.op.result_ref.applied_revision_id
-            }
-            onClick={accept}
-          >
-            Aplicar alterações revisadas
-          </button>
-        </Modal>
-      )}
-      {remote && (
-        <Modal
-          title="Compare a revisão mais recente"
-          close={() => setRemote(null)}
-        >
-          <p>
-            Reaplicar transporta os arquivos que você alterou para a nova base.
-            Revise colisões antes de salvar.
-          </p>
-          <div className="compare-grid">
-            <div>
-              <h3>Seu rascunho</h3>
-              <pre className="source-preview">
-                {JSON.stringify(files, null, 2)}
-              </pre>
-            </div>
-            <div>
-              <h3>Revisão salva</h3>
-              <pre className="source-preview">
-                {JSON.stringify(remote.files, null, 2)}
-              </pre>
-            </div>
-          </div>
-          <div className="actions">
-            <button
-              className="button"
-              onClick={() => {
-                setProject(remote.project);
-                setBaseFiles(remote.files);
-                draft.setData((d) => ({
-                  ...d,
-                  base_revision_id: remote.project.current_revision_id,
-                  files: null,
-                }));
-                setRemote(null);
-                setError(null);
-              }}
-            >
-              Carregar revisão salva
-            </button>
-            <button
-              className="button primary"
-              onClick={() => {
-                const merged = { ...remote.files };
-                for (const path of new Set([
-                  ...Object.keys(baseFiles),
-                  ...Object.keys(files),
-                ])) {
-                  if (baseFiles[path] !== files[path]) {
-                    if (path in files) merged[path] = files[path];
-                    else delete merged[path];
-                  }
-                }
-                setProject(remote.project);
-                setBaseFiles(remote.files);
-                draft.setData((d) => ({
-                  ...d,
-                  base_revision_id: remote.project.current_revision_id,
-                  files: merged,
-                }));
-                setRemote(null);
-                setError(null);
-              }}
-            >
-              Reaplicar minhas alterações
-            </button>
-          </div>
-        </Modal>
-      )}
-      {draft.conflict && (
-        <DraftConflict
-          local={draft.data}
-          remote={draft.conflict.data}
-          onResolve={draft.resolve}
-        />
-      )}
-      {exporting && (
-        <Modal title="Baixar seu projeto" close={() => setExporting(false)}>
-          <p>
-            O ZIP contém a revisão salva{" "}
-            {project.current_revision_id?.slice(0, 8)}.{" "}
-            {dirty
-              ? "Seu rascunho tem alterações que ainda não fazem parte dessa revisão."
-              : ""}
-          </p>
-          <div className="actions">
-            {dirty && (
-              <button
-                className="button"
-                disabled={blocked}
-                onClick={() =>
-                  void act(async () => {
-                    await save();
-                    setExporting(false);
-                    setMessage(
-                      "Revisão salva. Você já pode baixar o projeto atualizado.",
-                    );
-                  })
-                }
-              >
-                Salvar primeiro
-              </button>
-            )}
-            <button
-              className="button primary"
-              disabled={busy}
-              onClick={exportProject}
-            >
-              Baixar revisão salva
-            </button>
-          </div>
-        </Modal>
-      )}
-      {newFile && (
-        <Modal title="Novo arquivo" close={() => setNewFile(false)}>
-          <form
-            className="form"
-            onSubmit={(e) => {
-              e.preventDefault();
-              const path = String(new FormData(e.currentTarget).get("path"));
-              if (
-                path in files ||
-                Object.keys(files).length >= caps.limits.max_files
-              ) {
-                setError(
-                  new Error(
-                    "Arquivo existente ou limite de arquivos atingido.",
-                  ),
-                );
-                return;
-              }
-              draft.setData((d) => ({ ...d, files: { ...files, [path]: "" } }));
-              setSelected(path);
-              setNewFile(false);
-            }}
-          >
-            <label>
-              Caminho relativo
-              <input
-                name="path"
-                required
-                maxLength={caps.limits.max_path_length}
-                pattern="(?!/)(?!.*\.\.)(?!.*\\\\).+"
-                placeholder="public/novo-arquivo.js"
-              />
-            </label>
-            <button className="button primary">Adicionar arquivo</button>
-          </form>
-        </Modal>
-      )}
-      {editing && (
-        <Modal title="Editar projeto" close={() => setEditing(false)}>
-          <form
-            className="form"
-            onSubmit={(e) => {
-              e.preventDefault();
-              const form = new FormData(e.currentTarget);
-              void act(async () => {
-                setProject(
-                  await command<Project>(
-                    `/projects/${pid}`,
-                    {
-                      name: form.get("name"),
-                      objective: form.get("objective"),
-                    },
-                    "PATCH",
-                    project.version,
-                  ),
-                );
-                setEditing(false);
-              });
-            }}
-          >
-            <label>
-              Nome
-              <input
-                name="name"
-                defaultValue={project.name}
-                required
-                maxLength={100}
-              />
-            </label>
-            <label>
-              Objetivo
-              <textarea
-                name="objective"
-                defaultValue={project.objective}
-                required
-                minLength={10}
-                maxLength={3000}
-              />
-            </label>
-            <ErrorNotice error={error} />
-            <button className="button primary" disabled={busy}>
-              Salvar
-            </button>
-          </form>
-        </Modal>
-      )}
+      <WorkspaceDialogs
+        {...{
+          review,
+          setReview,
+          remote,
+          setRemote,
+          exporting,
+          setExporting,
+          newFile,
+          setNewFile,
+          editing,
+          setEditing,
+          baseFiles,
+          setBaseFiles,
+          files,
+          error,
+          setError,
+          blocked,
+          dirty,
+          busy,
+          accept,
+          project,
+          setProject,
+          draft,
+          caps,
+          act,
+          save,
+          setMessage,
+          exportProject,
+          setSelected,
+          pid,
+        }}
+      />
     </div>
   );
 }

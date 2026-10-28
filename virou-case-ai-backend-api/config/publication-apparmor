@@ -1,0 +1,22 @@
+#include <tunables/global>
+profile viracase-publication flags=(attach_disconnected,mediate_deleted) {
+  #include <abstractions/base>
+  network inet,
+  network inet6,
+  network unix,
+  network netlink,
+  capability,
+  file,
+  umount,
+  mount,
+  pivot_root,
+  userns,
+  signal (receive) peer=unconfined,
+  signal (send,receive) peer=viracase-publication,
+  deny /sys/** wklx,
+  deny /proc/sys/{abi,debug,dev,fs,kernel,net,sunrpc,vm}/** wklx,
+  deny /proc/sysrq-trigger rwklx,
+  deny /proc/kcore rwklx,
+  deny /proc/kmem rwklx,
+  deny /proc/mem rwklx,
+}

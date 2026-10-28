@@ -1,7 +1,25 @@
 from viracase.domain.rules import utcnow
 
-
 STAGES = {
+    "deletion_queued": "Exclusão solicitada. Aguardando o executor.",
+    "deletion_remote": "Removendo a publicação e o banco do projeto.",
+    "deletion_sources": "Removendo arquivos e rascunhos do projeto.",
+    "deletion_complete": "Projeto excluído. A vaga foi liberada.",
+    "verification_queued": "Verificação operacional agendada.",
+    "verification_isolation": "Testando o isolamento do executor.",
+    "verification_cloudflare": "Testando publicação temporária na Cloudflare.",
+    "verification_cleanup": "Confirmando remoção dos recursos de teste.",
+    "verification_complete": "Verificação operacional concluída.",
+    "proposal_discarded": "Proposta descartada. Os arquivos atuais foram preservados.",
+    "publication_building": "Preparando o artefato no executor isolado.",
+    "publication_provisioning": "Conferindo os recursos do projeto.",
+    "publication_migrating": "Aplicando migrations ao banco do projeto.",
+    "publication_uploading": "Enviando o artefato à hospedagem.",
+    "publication_routing": "Configurando o endereço público.",
+    "publication_verifying": "Verificando frontend, API e banco.",
+    "publication_verified": "Publicação verificada.",
+    "publication_reconciling": "Verificando resultado da publicação. Não repita o envio.",
+    "publication_failed": "Não foi possível concluir a publicação.",
     "repairing_response": "Ajustando a resposta recebida para aplicar as alterações com segurança.",
     "awaiting_answer": "Preciso confirmar um detalhe antes de alterar o código.",
     "changes_applied": "Alterações aplicadas e salvas no projeto.",

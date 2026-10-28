@@ -1,0 +1,401 @@
+.integration-settings,
+.integration-dialog {
+  min-width: 0;
+  accent-color: var(--navy);
+}
+.integration-settings h2,
+.integration-dialog h2,
+.integration-dialog h3 {
+  font-family: inherit;
+  letter-spacing: -0.025em;
+}
+.integration-settings h2,
+.integration-dialog h2 {
+  font-size: 23px;
+}
+.integration-settings h3,
+.integration-dialog h3 {
+  font-size: 16px;
+  margin: 0;
+}
+.integration-settings :focus-visible,
+.integration-dialog :focus-visible {
+  outline: 3px solid #426eb7;
+  outline-offset: 3px;
+}
+.integration-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  border-bottom: 1px solid var(--line);
+  padding-bottom: 18px;
+  margin-bottom: 28px;
+}
+.integration-tabs button {
+  display: inline-flex;
+  align-items: center;
+  gap: 9px;
+  min-height: 44px;
+  padding: 11px 17px;
+  border: 1px solid transparent;
+  border-radius: 9px;
+  background: transparent;
+  color: #526178;
+  font-size: 14px;
+  font-weight: 600;
+}
+.integration-tabs button[aria-pressed="true"] {
+  background: var(--pale);
+  color: var(--navy);
+  border-color: #ccd9ee;
+}
+.integration-intro {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 22px;
+  margin-bottom: 18px;
+}
+.integration-intro h2 {
+  margin: 0 0 8px;
+}
+.integration-intro p {
+  margin: 0;
+  color: #526178;
+  font-size: 14px;
+}
+.integration-intro > .button {
+  flex-shrink: 0;
+}
+.integration-settings .button,
+.integration-dialog .button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  min-height: 44px;
+}
+.integration-hint {
+  border-left: 3px solid #9db5dc;
+  background: #f5f8fc;
+  padding: 13px 16px;
+  font-size: 13px;
+  color: #42516a;
+  border-radius: 0 8px 8px 0;
+}
+.integration-filters {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(160px, 240px);
+  gap: 16px;
+  margin: 24px 0 18px;
+}
+.integration-filters.templates {
+  grid-template-columns: minmax(0, 1fr) minmax(150px, 210px) minmax(
+      140px,
+      180px
+    );
+}
+.integration-filters label {
+  font-size: 13px;
+}
+.integration-settings input,
+.integration-settings select,
+.integration-dialog input,
+.integration-dialog select,
+.integration-dialog textarea {
+  min-width: 0;
+  width: 100%;
+}
+.integration-dialog input[type="checkbox"] {
+  width: 18px;
+  flex-shrink: 0;
+}
+.integration-settings .table-wrap {
+  padding: 0;
+}
+.integration-settings table {
+  min-width: 680px;
+}
+.integration-settings thead {
+  background: #f7f9fc;
+}
+.integration-settings tbody th {
+  font-size: 13px;
+  letter-spacing: 0;
+  font-weight: 400;
+  color: var(--ink);
+  max-width: 330px;
+  min-width: 160px;
+  overflow-wrap: anywhere;
+}
+.integration-settings tbody th strong {
+  display: block;
+  font-size: 14px;
+}
+.integration-settings tbody th small {
+  display: block;
+  color: #526178;
+  margin-top: 8px;
+}
+.integration-settings tbody tr:last-child > * {
+  border-bottom: 0;
+}
+.integration-settings tbody tr:hover {
+  background: #fafcff;
+}
+.integration-settings td code {
+  font-size: 12px;
+}
+.integration-badge {
+  display: inline-block;
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1.5;
+  padding: 4px 9px;
+  border-radius: 6px;
+  white-space: nowrap;
+  background: #eef1f5;
+  color: #475569;
+}
+.integration-badge.default {
+  margin-top: 8px;
+  background: #eaf0fc;
+  color: #284c88;
+}
+.integration-badge.active,
+.integration-badge.validated {
+  background: #e9f6ee;
+  color: #21633b;
+}
+.integration-badge.invalid {
+  background: #fff0ef;
+  color: #a12921;
+}
+.integration-badge.draft {
+  background: #fff6df;
+  color: #775413;
+}
+.integration-row-actions {
+  display: flex;
+  gap: 8px;
+}
+.integration-row-actions .button {
+  font-size: 12px;
+  padding: 9px 12px;
+}
+.integration-empty {
+  text-align: center;
+  padding: 45px 18px;
+  border: 1px dashed #cdd7e5;
+  border-radius: 12px;
+  background: #fafcff;
+  font-size: 14px;
+}
+.integration-empty p {
+  margin: 8px 0 0;
+  color: #526178;
+}
+.integration-pagination,
+.integration-footer {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 18px;
+  margin-top: 20px;
+  font-size: 13px;
+  color: #526178;
+}
+.integration-pagination .actions {
+  gap: 8px;
+}
+.integration-dialog {
+  width: min(820px, calc(100% - 32px));
+  max-height: 92dvh;
+  padding: 28px;
+}
+.integration-dialog .dialog-head {
+  position: sticky;
+  top: -28px;
+  z-index: 1;
+  padding: 16px 0;
+  margin: -12px 0 8px;
+  background: white;
+  border-bottom: 1px solid var(--line);
+}
+.integration-dialog .dialog-head h2 {
+  overflow-wrap: anywhere;
+}
+.integration-dialog .dialog-head .icon-button {
+  flex-shrink: 0;
+}
+.integration-dialog .form label {
+  min-width: 0;
+  font-size: 13px;
+}
+.integration-dialog .field-help {
+  font-size: 12px;
+  line-height: 1.6;
+  color: #526178;
+  overflow-wrap: anywhere;
+}
+.integration-section {
+  min-width: 0;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 18px;
+  margin: 0;
+  display: grid;
+  gap: 16px;
+}
+.integration-section legend {
+  font-size: 14px;
+  font-weight: 650;
+  padding: 0 7px;
+  color: var(--navy);
+}
+.integration-section .field-help {
+  margin: 0;
+}
+.integration-stack {
+  border: 0;
+  padding: 0;
+  margin: 0;
+  min-width: 0;
+}
+.integration-stack legend {
+  font-size: 13px;
+  padding: 0;
+  margin-bottom: 5px;
+}
+.integration-footer {
+  border-top: 1px solid var(--line);
+  margin-top: 0;
+  padding-top: 18px;
+}
+.integration-dialog textarea {
+  resize: vertical;
+  font: inherit;
+}
+.integration-dialog .notice {
+  display: block;
+}
+.integration-dialog .small {
+  overflow-wrap: anywhere;
+}
+.integration-dialog summary {
+  min-height: 44px;
+  padding-top: 12px;
+}
+.integration-dialog details {
+  padding: 8px 0;
+}
+.integration-dialog details > label {
+  margin: 18px 0;
+}
+.integration-summary {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 18px;
+  margin: 18px 0 26px;
+  padding: 18px;
+  background: #f7f9fc;
+  border-radius: 10px;
+}
+.integration-summary dt {
+  color: #526178;
+  font-size: 12px;
+}
+.integration-summary dd {
+  margin: 6px 0 0;
+  font-size: 14px;
+}
+.integration-fields-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+.personal-field {
+  min-width: 0;
+  padding: 16px;
+  border: 1px solid #dce4f0;
+  border-radius: 9px;
+  background: #fafcff;
+}
+.personal-field > .button {
+  margin-top: 12px;
+}
+.template-summary {
+  margin: 10px 0 0;
+  color: #526178;
+  font-size: 12px;
+  line-height: 1.6;
+}
+.integration-dialog .template-content {
+  font-family: ui-monospace, monospace;
+  font-size: 13px;
+  line-height: 1.65;
+}
+@media (max-width: 850px) {
+  .integration-intro {
+    flex-direction: column;
+  }
+  .integration-filters.templates {
+    grid-template-columns: 1fr 1fr;
+  }
+  .integration-filters.templates > label:first-child {
+    grid-column: 1 / -1;
+  }
+}
+@media (max-width: 600px) {
+  .integration-settings.panel {
+    padding: 18px 14px;
+  }
+  .integration-tabs {
+    gap: 5px;
+  }
+  .integration-tabs button {
+    flex: 1;
+    padding: 10px;
+    font-size: 12px;
+  }
+  .integration-tabs svg {
+    display: none;
+  }
+  .integration-intro > .button {
+    width: 100%;
+  }
+  .integration-filters,
+  .integration-filters.templates,
+  .integration-summary {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .integration-pagination,
+  .integration-footer,
+  .integration-fields-head {
+    flex-direction: column;
+    align-items: stretch;
+  }
+  .integration-pagination .actions {
+    justify-content: space-between;
+  }
+  .integration-dialog {
+    width: calc(100% - 20px);
+    padding: 20px 14px;
+  }
+  .integration-dialog .dialog-head {
+    top: -20px;
+  }
+  .integration-dialog h2 {
+    font-size: 20px;
+  }
+  .integration-section {
+    padding: 14px 10px;
+  }
+  .integration-dialog .form-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .personal-field {
+    padding: 12px 10px;
+  }
+}

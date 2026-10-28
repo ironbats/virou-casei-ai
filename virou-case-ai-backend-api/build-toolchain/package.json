@@ -1,0 +1,6 @@
+{
+  "name": "viroucaseai-isolated-build",
+  "private": true,
+  "type": "module",
+  "dependencies": {"esbuild": "0.27.4", "hono": "4.12.9"}
+}

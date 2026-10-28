@@ -1,14 +1,16 @@
-from datetime import datetime, timedelta
-from decimal import Decimal
-from hashlib import sha256
 import io
 import secrets
 import zipfile
+from datetime import timedelta
+from decimal import Decimal
+from hashlib import sha256
+
 from argon2 import PasswordHasher
-from argon2.exceptions import VerificationError, InvalidHashError
-from sqlalchemy import select, func, delete, and_, or_
+from argon2.exceptions import InvalidHashError, VerificationError
+from sqlalchemy import and_, delete, func, or_, select
 from sqlalchemy.exc import IntegrityError
-from viracase.application.progress import STAGES, progress_message, record_progress
+
+from viracase.application.progress import record_progress
 from viracase.domain.rules import (
     Access,
     RuleError,
@@ -23,13 +25,11 @@ from viracase.domain.rules import (
 from viracase.infrastructure.models import (
     Account,
     Attempt,
-    Audit,
     Grant,
     Idempotency,
     Job,
     Ledger,
     Operation,
-    Payment,
     Period,
     Project,
     RateBucket,
@@ -38,67 +38,15 @@ from viracase.infrastructure.models import (
     Session,
     new_id,
 )
-
+from viracase.infrastructure.repository_admin import RepositoryAdmin
+from viracase.infrastructure.repository_dto import iso, operation_dto, project_dto, revision_dto
 
 HASHER = PasswordHasher()
 DUMMY_HASH = HASHER.hash(secrets.token_urlsafe(32))
 TERMINAL = {"succeeded", "failed", "cancelled"}
 
 
-def iso(value):
-    return aware(value).isoformat() if value else None
-
-
-def project_dto(p):
-    return {
-        "id": p.id,
-        "name": p.name,
-        "objective": p.objective,
-        "stack": p.stack,
-        "version": p.version,
-        "current_revision_id": p.current_revision_id,
-        "state": p.state,
-        "created_at": iso(p.created_at),
-    }
-
-
-def revision_dto(r):
-    return {
-        "id": r.id,
-        "project_id": r.project_id,
-        "source_hash": r.source_hash,
-        "files": r.manifest,
-        "origin": r.origin,
-        "candidate": r.candidate,
-        "created_at": iso(r.created_at),
-    }
-
-
-def operation_dto(o, admin=False):
-    return {
-        "id": o.id,
-        "type": o.type,
-        "project_id": o.project_id,
-        "state": o.state,
-        "progress_stage": o.progress_stage,
-        "billing_status": o.billing_status,
-        "pending_reconciliation": o.billing_status == "reconciliation_pending" or o.state == "reconciling",
-        "cancel_requested": o.cancel_requested,
-        "result_ref": {k: v for k, v in o.result.items() if k != "activity"},
-        "request_text": o.payload.get("brief") if o.type == "generation" else None,
-        "progress_message": progress_message(o),
-        "activity": [
-            {**event, "message": STAGES.get(event["stage"], progress_message(o))}
-            for event in o.result.get("activity", [])
-        ],
-        "error_code": o.error_code,
-        "model_label": o.policy.get("model") if admin else None,
-        "created_at": iso(o.created_at),
-        "updated_at": iso(o.updated_at),
-    }
-
-
-class Repository:
+class Repository(RepositoryAdmin):
     def __init__(self, sessions, sources, config):
         self.sessions, self.sources, self.config = sessions, sources, config
 
@@ -141,7 +89,13 @@ class Repository:
         }
 
     def owned_project(self, db, account_id, project_id):
-        p = db.scalar(select(Project).where(Project.id == project_id, Project.account_id == account_id))
+        p = db.scalar(
+            select(Project).where(
+                Project.id == project_id,
+                Project.account_id == account_id,
+                Project.state.not_in(["deleting", "deleted"]),
+            )
+        )
         if not p:
             raise RuleError("NOT_FOUND", "Recurso indisponível.", 404)
         return p
@@ -290,7 +244,9 @@ class Repository:
             a = self.account(db, actor)
             access = self.access(db, a, "read")
             items = db.scalars(
-                select(Project).where(Project.account_id == actor).order_by(Project.created_at, Project.id)
+                select(Project)
+                .where(Project.account_id == actor, Project.state != "deleted")
+                .order_by(Project.created_at, Project.id)
             ).all()
             return {
                 "items": [project_dto(p) for p in items],
@@ -304,7 +260,11 @@ class Repository:
 
     def create_project(self, actor, key, payload):
         def command(db, a):
-            count = db.scalar(select(func.count()).select_from(Project).where(Project.account_id == actor))
+            count = db.scalar(
+                select(func.count())
+                .select_from(Project)
+                .where(Project.account_id == actor, Project.state != "deleted")
+            )
             if count >= 2:
                 raise RuleError("PROJECT_LIMIT_REACHED", "Você já possui os dois projetos permitidos.")
             p = Project(
@@ -437,6 +397,10 @@ class Repository:
                     "Isolamento, execução e publicação ainda aguardam validação operacional.",
                 )
             if kind == "generation":
+                if payload.get("guided_request"):
+                    from viracase.infrastructure.guided_build import GuidedBuild
+
+                    GuidedBuild(self, None).freeze(db, actor, pid, payload)
                 if self.config.restore_hold:
                     raise RuleError(
                         "RECOVERY_HOLD", "Operações pausadas para reconciliação após restauração."
@@ -494,7 +458,12 @@ class Repository:
             return operation_dto(op)
 
         return self.mutate(
-            actor, f"{kind}:{pid}", key, payload, command, "export" if kind == "export" else "generate"
+            actor,
+            f"guided-send:{pid}" if payload.get("guided_request") else f"{kind}:{pid}",
+            key,
+            payload.get("guided_request", payload),
+            command,
+            "export" if kind == "export" else "generate",
         )
 
     def operations(
@@ -561,6 +530,11 @@ class Repository:
             )
             if not op:
                 raise RuleError("NOT_FOUND", "Operação indisponível.", 404)
+            if op.type in {"project_deletion", "publication_check"} and op.state not in TERMINAL:
+                raise RuleError(
+                    "OPERATION_CONFLICT",
+                    "Esta operação precisa concluir a remoção e a verificação dos recursos.",
+                )
             if op.state not in TERMINAL:
                 op.cancel_requested = True
                 if op.state == "queued":
@@ -692,200 +666,3 @@ class Repository:
                     archive.writestr(path, content)
             self.access(db, a, "export")
             return buffer.getvalue(), f"viroucaseai-{p.id[:8]}-{r.id[:8]}.zip"
-
-    def admin_accounts(self, cursor=None):
-        with self.sessions() as db:
-            q = select(Account).where(Account.role == "student")
-            if cursor:
-                q = q.where(Account.id > cursor)
-            rows = db.scalars(q.order_by(Account.id).limit(51)).all()
-            return {
-                "items": [
-                    {
-                        "id": a.id,
-                        "name": a.name,
-                        "login": a.login,
-                        "suspended": a.suspended,
-                        "access": self.access(db, a),
-                    }
-                    for a in rows[:50]
-                ],
-                "next_cursor": rows[49].id if len(rows) > 50 else None,
-            }
-
-    def admin_command(self, actor, action, target, key, payload):
-        def command(db, operator):
-            if operator.role != "admin":
-                raise RuleError("FORBIDDEN", "Ação administrativa não permitida.", 403)
-            if action == "create-account":
-                a = Account(
-                    login=payload["login"].strip().lower(),
-                    name=payload["name"],
-                    password_hash=HASHER.hash(payload["password"]),
-                )
-                db.add(a)
-                db.flush()
-            else:
-                a = self.account(db, target, True)
-                if a.role != "student":
-                    raise RuleError("FORBIDDEN", "Ação restrita a contas de alunos.", 403)
-            if action in {"grant", "topup"}:
-                paid = money(payload["amount_paid_brl"])
-                credit = money(payload.get("api_credit_brl", "50"))
-                if paid <= 0 or credit <= 0 or (action == "grant" and paid != Decimal(75)):
-                    raise RuleError(
-                        "VALIDATION_ERROR", "Confira o pagamento e o crédito. O valor do ciclo é R$ 75.", 400
-                    )
-                if db.scalar(select(Payment.id).where(Payment.reference == payload["reference"])):
-                    raise RuleError("PAYMENT_ALREADY_RECORDED", "Referência de pagamento já registrada.")
-                if action == "grant":
-                    if a.lifecycle in {"purging", "reconciling"}:
-                        raise RuleError(
-                            "PURGE_IN_PROGRESS",
-                            "Expurgo em curso. Não é possível garantir preservação de dados.",
-                        )
-                    start = aware(
-                        payload["starts_at"]
-                        if not isinstance(payload["starts_at"], str)
-                        else datetime.fromisoformat(payload["starts_at"])
-                    )
-                    if abs((start - utcnow()).total_seconds()) > 300:
-                        raise RuleError(
-                            "INVALID_ACCESS_START",
-                            "Ative o novo ciclo no instante atual; confirme as novas datas.",
-                            400,
-                        )
-                    old = db.scalars(
-                        select(Grant).where(Grant.account_id == a.id, Grant.closed.is_(False))
-                    ).all()
-                    for g in old:
-                        self.ledger(db, g, "expire", g.available, f"close:{g.id}")
-                        g.expired += g.available
-                        g.available, g.closed = Decimal(0), True
-                    access = Access.activate(start, payload.get("access_days", 30))
-                    a.entitlement_version += 1
-                    p = Period(
-                        account_id=a.id,
-                        starts_at=access.starts_at,
-                        expires_at=access.expires_at,
-                        purge_at=access.purge_at,
-                        version=a.entitlement_version,
-                    )
-                    db.add(p)
-                    db.flush()
-                    a.current_period_id, a.lifecycle, a.suspended, a.fence = p.id, "active", False, None
-                else:
-                    self.access(db, a, "write")
-                payment = Payment(
-                    account_id=a.id,
-                    operator_id=actor,
-                    reference=payload["reference"],
-                    amount=paid,
-                    credit=credit,
-                    kind=action,
-                    reason=payload["reason"],
-                )
-                db.add(payment)
-                db.flush()
-                g = Grant(
-                    account_id=a.id,
-                    period_id=a.current_period_id,
-                    kind="included" if action == "grant" else "topup",
-                    total=credit,
-                    available=credit,
-                )
-                db.add(g)
-                db.flush()
-                self.ledger(db, g, "credit", credit, f"payment:{payment.id}")
-            elif action == "access-adjust":
-                period = self.period(db, a)
-                if not period or a.lifecycle != "active" or aware(period.purge_at) <= utcnow():
-                    raise RuleError("ACCESS_EXPIRED", "Ative um novo ciclo para esta conta.", 409)
-                if a.entitlement_version != payload["expected_version"]:
-                    raise RuleError(
-                        "VERSION_CONFLICT", "O acesso mudou. Atualize a conta e tente novamente.", 409
-                    )
-                end = payload["expires_at"]
-                end = aware(datetime.fromisoformat(end) if isinstance(end, str) else end)
-                access = Access(period.starts_at, period.expires_at, period.purge_at).with_expiry(
-                    end, utcnow()
-                )
-                period.expires_at, period.purge_at = access.expires_at, access.purge_at
-                a.entitlement_version += 1
-                period.version = a.entitlement_version
-            elif action == "suspend":
-                a.suspended = True
-            elif action == "reset":
-                a.password_hash = HASHER.hash(payload["password"])
-                db.execute(delete(Session).where(Session.account_id == a.id))
-            elif action == "adjust":
-                self.access(db, a, "write")
-                value = money(payload["amount_brl"])
-                if value == 0:
-                    raise RuleError("VALIDATION_ERROR", "O ajuste precisa ser diferente de zero.", 400)
-                if value > 0:
-                    g = Grant(
-                        account_id=a.id,
-                        period_id=a.current_period_id,
-                        kind="adjustment",
-                        total=value,
-                        available=value,
-                    )
-                    db.add(g)
-                    db.flush()
-                    self.ledger(db, g, "adjustment", value, f"adjust:{g.id}")
-                else:
-                    grants = db.scalars(
-                        select(Grant)
-                        .where(
-                            Grant.account_id == a.id,
-                            Grant.period_id == a.current_period_id,
-                            Grant.closed.is_(False),
-                        )
-                        .order_by(Grant.id)
-                    ).all()
-                    reserve(sum((g.available for g in grants), Decimal(0)), -value)
-                    remaining = -value
-                    for g in grants:
-                        part = min(remaining, g.available)
-                        g.available -= part
-                        g.expired += part
-                        if part:
-                            self.ledger(db, g, "adjustment", -part, f"adjust:{new_id()}")
-                        remaining -= part
-            db.add(
-                Audit(
-                    actor_id=actor,
-                    action=action,
-                    resource_id=a.id,
-                    reason=payload.get("reason", "Provisionamento manual"),
-                )
-            )
-            db.flush()
-            return {"id": a.id, "name": a.name, "login": a.login, "access": self.access(db, a)}
-
-        safe_payload = dict(payload)
-        if "password" in safe_payload:
-            safe_payload["password"] = sha256(safe_payload["password"].encode()).hexdigest()
-        return self.mutate(actor, f"admin:{action}:{target or 'new'}", key, safe_payload, command)
-
-    def audit_events(self, cursor=None):
-        with self.sessions() as db:
-            q = select(Audit)
-            if cursor:
-                q = q.where(Audit.id > cursor)
-            rows = db.scalars(q.order_by(Audit.id).limit(51)).all()
-            return {
-                "items": [
-                    {
-                        "id": a.id,
-                        "actor_id": a.actor_id,
-                        "action": a.action,
-                        "resource_id": a.resource_id,
-                        "reason": a.reason,
-                        "created_at": iso(a.created_at),
-                    }
-                    for a in rows[:50]
-                ],
-                "next_cursor": rows[49].id if len(rows) > 50 else None,
-            }

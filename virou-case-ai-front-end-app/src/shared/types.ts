@@ -1,3 +1,4 @@
+import type { BuildPolicy } from "../features/guidedTypes";
 export type Access = {
   status: string;
   allowed_actions: string[];
@@ -54,7 +55,17 @@ export type Operation = {
   activity?: { stage: string; at: string; message: string }[];
   created_at: string;
   updated_at?: string;
+  attachment_snapshots?: {
+    id: string;
+    title: string;
+    version: number;
+    content: string;
+    content_hash: string;
+  }[];
   result_ref: {
+    discarded_at?: string;
+    url?: string;
+    verified_at?: string;
     kind?: "implementation" | "clarification";
     message?: string;
     apply_conflict?: boolean;
@@ -78,6 +89,7 @@ export type Wallet = {
 };
 export type Capability = { enabled: boolean; reason_code?: string };
 export type Capabilities = {
+  guided_build: BuildPolicy;
   visual_preview?: Capability & {
     mode: "browser_static";
     backend_execution: false;

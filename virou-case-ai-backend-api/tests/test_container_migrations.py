@@ -21,11 +21,19 @@ BACKEND = Path(__file__).resolve().parents[1]
 def image_tree(tmp_path):
     image = tmp_path / "image"
     image.mkdir()
-    for name in ("src", "migrations", "script", "content", "config"):
+    for name in ("src", "migrations", "script", "content", "config", "build-toolchain"):
         shutil.copytree(
             BACKEND / name,
             image / name,
-            ignore=shutil.ignore_patterns("__pycache__", "*.pyc", "*.egg-info"),
+            ignore=shutil.ignore_patterns(
+                "__pycache__",
+                "*.pyc",
+                "*.egg-info",
+                "node_modules",
+                ".venv-workers",
+                "python_modules",
+                "python-vendor.json",
+            ),
         )
     for name in ("Dockerfile", "alembic.ini", "pyproject.toml", "requirements.lock", ".dockerignore"):
         shutil.copy2(BACKEND / name, image / name)
@@ -181,7 +189,7 @@ def test_existing_revision_and_admin_survive_permission_fix_and_upgrade(image_tr
             assert accounts[0].id == "existing-admin"
             assert accounts[0].password_hash == "synthetic-existing-hash-preserved"
             assert accounts[0].login == "keep-existing-admin"
-            assert session.scalar(text("SELECT version_num FROM alembic_version")) == "0003"
+            assert session.scalar(text("SELECT version_num FROM alembic_version")) == "0006"
     finally:
         engine.dispose()
 

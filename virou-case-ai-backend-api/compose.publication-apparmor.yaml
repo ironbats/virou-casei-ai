@@ -1,0 +1,6 @@
+services:
+  worker:
+    security_opt:
+      - no-new-privileges:true
+      - seccomp=./config/publication-seccomp.json
+      - apparmor=viracase-publication

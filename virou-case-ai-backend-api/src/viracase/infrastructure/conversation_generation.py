@@ -1,15 +1,18 @@
-from datetime import timedelta
 import json
 import logging
+from datetime import timedelta
+
 from sqlalchemy import select
-from viracase.application.conversation import MAX_BATCHES, prompt_for, apply_batch
-from viracase.application.progress import record_progress
+
+from viracase.application.conversation import MAX_BATCHES, apply_batch, prompt_for
 from viracase.application.conversation_turn import InvalidTurn, parse_turn, turn_prompt
+from viracase.application.progress import record_progress
+from viracase.domain.rules import RuleError, cost, utcnow, validate_file_entries, validate_files
 from viracase.infrastructure.conversation_state import save_turn
-from viracase.domain.rules import RuleError, cost, utcnow, validate_files, validate_file_entries
+from viracase.infrastructure.guided_build import attachment_context
 from viracase.infrastructure.models import Attempt, Job, Operation
-from viracase.infrastructure.providers import ProviderRejected, ProviderUncertain
 from viracase.infrastructure.provider_errors import report_rejection
+from viracase.infrastructure.providers import ProviderRejected, ProviderUncertain
 from viracase.infrastructure.repository import project_dto
 
 
@@ -62,7 +65,7 @@ def execute_conversation(worker, oid, token):
                     original = dict(files)
                 prompt = prompt_for(
                     project_dto(p),
-                    op.payload["brief"],
+                    attachment_context(op.payload),
                     files,
                     batch,
                     smaller,
@@ -76,7 +79,7 @@ def execute_conversation(worker, oid, token):
                 try:
                     prompt = turn_prompt(
                         project_dto(p),
-                        op.payload["brief"],
+                        attachment_context(op.payload),
                         files,
                         batch,
                         smaller,

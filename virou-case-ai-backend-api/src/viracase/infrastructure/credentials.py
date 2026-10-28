@@ -7,7 +7,7 @@ from cryptography.fernet import Fernet, InvalidToken
 from sqlalchemy import select
 
 from viracase.domain.rules import RuleError
-from viracase.infrastructure.models import AIConnection
+from viracase.infrastructure.models import AIConnection, IntegrationConfig
 
 
 def initialize_key(path, sessions):
@@ -18,7 +18,9 @@ def initialize_key(path, sessions):
         Fernet(path.read_bytes())
         return
     with sessions() as db:
-        if db.scalar(select(AIConnection.id).limit(1)):
+        if db.scalar(select(AIConnection.id).limit(1)) or db.scalar(
+            select(IntegrationConfig.id).where(IntegrationConfig.credential.is_not(None)).limit(1)
+        ):
             raise ValueError(
                 "Restaure var/secrets/credentials.key: existem credenciais criptografadas no banco."
             )

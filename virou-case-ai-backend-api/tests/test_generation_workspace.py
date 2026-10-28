@@ -196,7 +196,7 @@ def test_latest_pagination_and_active_filter_are_account_scoped(system):
     assert (
         next(
             item
-            for item in repo.operations(system["admin"], admin=True)["items"]
+            for item in repo.operations(system["admin"], admin=True, state="active")["items"]
             if item["id"] == operation["id"]
         )["model_label"]
         == system["policy"]["model"]

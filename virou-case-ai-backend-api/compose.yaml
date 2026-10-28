@@ -194,6 +194,9 @@ services:
       start_period: 15s
   worker:
     <<: *backend
+    security_opt:
+      - no-new-privileges:true
+      - seccomp=./config/publication-seccomp.json
     restart: unless-stopped
     command: ["python", "-m", "viracase.infrastructure.worker"]
     volumes:

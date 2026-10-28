@@ -1,10 +1,12 @@
 import { useState } from "react";
-import { ArrowLeft, FileCode2, ShieldCheck } from "lucide-react";
+import { ArrowLeft, ShieldCheck } from "lucide-react";
 import { Link, useParams } from "react-router-dom";
 import { useSession } from "../app/session";
 import { api, command, date } from "../shared/api";
 import { ErrorNotice, Loading, Modal, useLoad } from "../shared/ui";
-import type { Capabilities, Page, Project, Revision } from "../shared/types";
+import type { Page, Project, Revision } from "../shared/types";
+import { PublicationControl } from "./PublicationControl";
+import { useProjectOperations } from "./useProjectOperations";
 import { ProjectWorkspace } from "./ProjectWorkspace";
 export function Workspace() {
   const { projectId } = useParams();
@@ -142,15 +144,12 @@ export function ProjectHistory() {
 
 export function Publish() {
   const { projectId: pid } = useParams(),
-    { user } = useSession(),
-    { data, error } = useLoad(
-      () =>
-        Promise.all([
-          api<Project>("/projects/" + pid),
-          api<Capabilities>("/capabilities"),
-        ]),
-      [pid],
-    );
+    { user } = useSession();
+  const { data: project, error } = useLoad(
+    () => api<Project>("/projects/" + pid),
+    [pid],
+  );
+  const operations = useProjectOperations(pid);
   return (
     <>
       <Link className="back-link" to={"/app/projetos/" + pid}>
@@ -163,61 +162,38 @@ export function Publish() {
           <p>Revise sua aplicação antes de colocá-la no ar.</p>
         </div>
       </div>
-      <ErrorNotice error={error} />
-      {!data && !error ? (
-        <Loading />
-      ) : (
-        data && (
-          <>
-            <div className="publish-grid">
-              <section className="panel preview-blocked">
-                <FileCode2 size={56} strokeWidth={1.2} />
-                <h2>Prévia do seu projeto</h2>
-                <p>A execução isolada aguarda validação técnica.</p>
-                <Link className="button" to={"/app/projetos/" + pid}>
-                  Revisar arquivos e baixar fonte
-                </Link>
-              </section>
-              <section className="panel">
-                <h2>Verificações antes de publicar</h2>
-                <div className="notice">
-                  <ShieldCheck />
-                  <span>
-                    Publicação bloqueada: {data[1].publication.reason_code}.
-                    Ainda não existe comprovação do isolamento e da capacidade
-                    do ambiente.
-                  </span>
-                </div>
-                <label className="check-row">
-                  <input type="checkbox" />
-                  Revisei os dados que ficarão públicos
-                </label>
-                <label className="check-row">
-                  <input type="checkbox" />
-                  Tenho critérios de teste para o fluxo principal
-                </label>
-                <button className="button primary full" disabled>
-                  Publicar projeto
-                </button>
-                <p className="small muted">
-                  A marcação das revisões não libera uma capacidade bloqueada
-                  pelo servidor.
-                </p>
-              </section>
-            </div>
-            <div className="learning-nudge">
-              <ShieldCheck />
-              <div>
-                <h2>Hospedagem e arquivos até o dia 32 do ciclo</h2>
-                <p>
-                  Baixe antes de {date(user?.access.purge_at)}. Sem renovação, o
-                  acesso aos arquivos termina e o expurgo é processado.
-                </p>
-              </div>
-            </div>
-          </>
-        )
+      <ErrorNotice error={error || operations.error} />
+      {!project && !error && <Loading />}
+      {project && pid && (
+        <section className="panel">
+          <h2>{project.name}</h2>
+          <p>
+            Revisão salva: {project.current_revision_id?.slice(0, 8)}. Confira
+            código e prévia no projeto antes de publicar.
+          </p>
+          <PublicationControl
+            pid={pid}
+            revision={project.current_revision_id}
+            dirty={false}
+            busy={false}
+            operations={operations.items}
+            onAccepted={(op) => {
+              operations.accept(op);
+              operations.refresh();
+            }}
+          />
+        </section>
       )}
+      <div className="learning-nudge">
+        <ShieldCheck />
+        <div>
+          <h2>Hospedagem e arquivos até o dia 32 do ciclo</h2>
+          <p>
+            Baixe antes de {date(user?.access.purge_at)}. Sem renovação, o
+            acesso aos arquivos termina e o expurgo é processado.
+          </p>
+        </div>
+      </div>
     </>
   );
 }

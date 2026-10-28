@@ -13,4 +13,8 @@ def database(url):
         def enable_foreign_keys(connection, record):
             connection.execute("PRAGMA foreign_keys=ON")
 
-    return engine, sessionmaker(engine, expire_on_commit=False)
+    from viracase.infrastructure.observability import install_events
+
+    sessions = sessionmaker(engine, expire_on_commit=False)
+    install_events(sessions)
+    return engine, sessions

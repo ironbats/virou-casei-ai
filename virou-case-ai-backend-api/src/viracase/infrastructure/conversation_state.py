@@ -3,6 +3,7 @@ from sqlalchemy import select
 from viracase.application.conversation_turn import turn_prompt
 from viracase.domain.rules import RuleError
 from viracase.infrastructure.drafts import Drafts
+from viracase.infrastructure.guided_build import attachment_context
 from viracase.infrastructure.models import Operation
 
 
@@ -65,13 +66,19 @@ def prepare_turn(repo, db, operation, project):
         for item in reversed(history)
     ]
     operation.payload = {**operation.payload, "history": context, "project_version": project.version}
-    turn_prompt(
+    prompt = turn_prompt(
         project_dto(project),
-        operation.payload["brief"],
+        attachment_context(operation.payload),
         files,
         history=context,
         output_tokens=operation.policy["max_output_tokens"],
     )
+    if len(prompt.encode()) > operation.payload.get("context_limit_bytes", 60000):
+        raise RuleError(
+            "CONTEXT_LIMIT_EXCEEDED",
+            "Mensagem, anexos, histórico e arquivos excedem o limite configurado. Reduza o conteúdo antes de enviar.",
+            400,
+        )
 
 
 def save_turn(repo, db, operation, project, files, original, changed, message):
@@ -91,17 +98,24 @@ def save_turn(repo, db, operation, project, files, original, changed, message):
         )
     )
     revision = repo.add_revision(
-        db, project, files, "generation", operation.payload["base_revision_id"], proposal=bool(conflict)
+        db,
+        project,
+        files,
+        "generation",
+        operation.payload["base_revision_id"],
+        proposal=bool(conflict or operation.payload.get("review_required")),
     )
     operation.result = {
         **operation.result,
         "kind": "implementation",
         "message": message,
         "revision_id": revision.id,
-        "candidate": bool(conflict),
+        "candidate": revision.candidate,
         "changed_files": changed,
         "validation": "structure_checked",
     }
+    if operation.payload.get("review_required") and not conflict:
+        return "proposal_ready"
     if conflict:
         operation.result = {**operation.result, "apply_conflict": True}
         return "proposal_ready"

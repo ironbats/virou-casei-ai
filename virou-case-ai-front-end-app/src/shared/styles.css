@@ -2921,3 +2921,7 @@ dialog:has(.compare-grid) {
 .assistant-message { white-space: pre-wrap; overflow-wrap: anywhere; }
 
 .build-turn[data-kind="clarification"] .build-status { color: var(--navy); }
+
+.project-delete { margin-top: 12px; }
+.button.danger { color: var(--danger, #a32239); border-color: currentColor; background: var(--surface, #fff); }
+.button.danger:hover:not(:disabled) { background: #fff0f2; }

@@ -1,42 +1,46 @@
-from contextlib import asynccontextmanager
-from decimal import Decimal
 import hmac
 import json
 import logging
 import time
+from contextlib import asynccontextmanager
+from decimal import Decimal
 from uuid import uuid4
-from fastapi import BackgroundTasks, Depends, FastAPI, Header, Request
+
+from fastapi import BackgroundTasks, Depends, FastAPI, Header, Query, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse, Response
 from sqlalchemy import select, text
 from starlette.middleware.trustedhost import TrustedHostMiddleware
+
 from viracase.application.generation import GenerationService
 from viracase.domain.rules import RuleError, cost
 from viracase.infrastructure.config import normalize_origin
-from viracase.infrastructure.learning import LearningLibrary
 from viracase.infrastructure.drafts import Drafts
-from viracase.infrastructure.models import Audit, Attempt, Job, Operation, PurgeInventory
+from viracase.infrastructure.integrations import Integrations
+from viracase.infrastructure.learning import LearningLibrary
+from viracase.infrastructure.models import Attempt, Audit, Job, Operation, PurgeInventory
+from viracase.infrastructure.publication import PublicationService
 from viracase.interfaces.schemas import (
-    AccessInput,
     AccessAdjustmentInput,
+    AccessInput,
     AccountInput,
     AdjustmentInput,
     BackupEvidence,
-    GenerateInput,
     ConversationInput,
+    GenerateInput,
+    LearningDraftInput,
     Login,
     PaymentInput,
+    ProjectDraftInput,
     ProjectInput,
+    ProjectDeletionInput,
     ReasonInput,
     ReconcileInput,
     ResetInput,
     RevisionInput,
     RevisionReference,
-    ProjectDraftInput,
-    LearningDraftInput,
     TransferInput,
 )
-
 
 OFFER = {
     "offer_id": "experimentation",
@@ -201,7 +205,7 @@ def create_app(admin=False, dependencies=None):
     def ready():
         with engine.connect() as connection:
             version = connection.execute(text("SELECT version_num FROM alembic_version")).scalar()
-            if version != "0003":
+            if version != "0006":
                 raise RuleError("SCHEMA_PENDING", "Migrações pendentes.", 503)
         return {"status": "ready"}
 
@@ -234,6 +238,9 @@ def create_app(admin=False, dependencies=None):
         return who
 
     if not admin:
+        from viracase.interfaces.guided_routes import mount_guided_routes
+
+        mount_guided_routes(app, prefix, repo, learning, generation, actor, key, version)
 
         @app.get(prefix + "/offer")
         def offer():
@@ -258,7 +265,12 @@ def create_app(admin=False, dependencies=None):
                 },
                 "preview": blocked,
                 "visual_preview": {"enabled": True, "mode": "browser_static", "backend_execution": False},
-                "publication": blocked,
+                "publication": PublicationService(repo).capability(),
+                "guided_build": {
+                    k: v
+                    for k, v in Integrations(repo).build_policy().items()
+                    if k.startswith("max_") or k == "autosave_ms"
+                },
                 "generation": {
                     "enabled": enabled,
                     "reason_code": None if enabled else "COMMERCIAL_CONFIGURATION_PENDING",
@@ -272,12 +284,16 @@ def create_app(admin=False, dependencies=None):
         @app.get(prefix + "/learning/guides")
         def guides(category: str | None = None, who=Depends(actor)):
             authorize_learning(who)
-            return learning.list(category)
+            from viracase.infrastructure.template_catalog import TemplateCatalog
+
+            return TemplateCatalog(repo, learning).guides(who["id"], category)
 
         @app.get(prefix + "/learning/guides/{slug}")
         def guide(slug: str, who=Depends(actor)):
             authorize_learning(who)
-            return learning.get(slug)
+            from viracase.infrastructure.template_catalog import TemplateCatalog
+
+            return TemplateCatalog(repo, learning).get_guide(who["id"], slug)
 
         @app.get(prefix + "/learning/guides/{slug}/draft")
         def learning_draft(slug: str, who=Depends(actor)):
@@ -329,6 +345,18 @@ def create_app(admin=False, dependencies=None):
         def project(pid: str, who=Depends(actor)):
             item = repo.project(who["id"], pid)
             return JSONResponse(item, headers={"ETag": f'"{item["version"]}"'})
+
+        @app.delete(prefix + "/projects/{pid}", status_code=202)
+        def delete_project(
+            pid: str,
+            data: ProjectDeletionInput,
+            who=Depends(actor),
+            intention=Depends(key),
+            current=Depends(version),
+        ):
+            from viracase.infrastructure.project_deletion import request_deletion
+
+            return request_deletion(repo, who["id"], pid, intention, current, data.confirmation)
 
         @app.patch(prefix + "/projects/{pid}")
         def patch_project(
@@ -393,9 +421,13 @@ def create_app(admin=False, dependencies=None):
         def preview(pid: str, data: RevisionReference, who=Depends(actor), intention=Depends(key)):
             return repo.create_operation(who["id"], pid, "preview", intention, data.model_dump())
 
+        @app.get(prefix + "/projects/{pid}/publication-readiness")
+        def publication_readiness(pid: str, revision_id: str | None = None, who=Depends(actor)):
+            return PublicationService(repo).readiness(who["id"], pid, revision_id)
+
         @app.post(prefix + "/projects/{pid}/publications", status_code=202)
         def publish(pid: str, data: RevisionReference, who=Depends(actor), intention=Depends(key)):
-            return repo.create_operation(who["id"], pid, "publication", intention, data.model_dump())
+            return PublicationService(repo).start(who["id"], pid, intention, data.model_dump())
 
         @app.get(prefix + "/exports/{eid}/download")
         def download(eid: str, who=Depends(actor)):
@@ -439,6 +471,9 @@ def create_app(admin=False, dependencies=None):
         from viracase.interfaces.ai_routes import mount_ai_routes
 
         mount_ai_routes(app, prefix, repo, catalog, actor, key)
+        from viracase.interfaces.integration_routes import mount_integration_routes
+
+        mount_integration_routes(app, prefix, repo, actor, key, version)
 
         @app.get(prefix + "/accounts")
         def accounts(cursor: str | None = None, who=Depends(actor)):
@@ -488,6 +523,26 @@ def create_app(admin=False, dependencies=None):
         def audit(cursor: str | None = None, who=Depends(actor)):
             return repo.audit_events(cursor)
 
+        @app.get(prefix + "/observability/events")
+        def runtime_events(
+            service: str | None = Query(None, pattern="^(jev|agents|cloudflare|platform)$"),
+            level: str | None = Query(None, pattern="^(info|warning|error)$"),
+            correlation: str | None = Query(None, max_length=36),
+            project: str | None = Query(None, max_length=36),
+            before: int | None = Query(None, ge=1),
+            limit: int = Query(100, ge=1, le=200),
+            who=Depends(actor),
+        ):
+            from viracase.infrastructure.observability import events
+
+            return events(repo, who["id"], service, level, correlation, project, before, limit)
+
+        @app.get(prefix + "/observability/runtime")
+        def runtime_status(who=Depends(actor)):
+            from viracase.infrastructure.observability import runtime_snapshot
+
+            return {"workers": runtime_snapshot(repo)}
+
         @app.get(prefix + "/operational-status")
         def operational_status(who=Depends(actor)):
             with repo.sessions() as db:
@@ -496,7 +551,7 @@ def create_app(admin=False, dependencies=None):
                     "ai_enabled": bool(catalog.eligible()),
                     "restore_hold": config.restore_hold,
                     "lifecycle_enabled": config.lifecycle_enabled,
-                    "publication_enabled": False,
+                    "publication_enabled": PublicationService(repo).capability()["enabled"],
                     "purges": [
                         {
                             "account_id": r.account_id,

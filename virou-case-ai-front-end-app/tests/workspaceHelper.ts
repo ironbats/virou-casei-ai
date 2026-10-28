@@ -1,7 +1,7 @@
 import { expect, type BrowserContext, type Page } from "@playwright/test";
 
 let sessionCookies: Awaited<ReturnType<BrowserContext["cookies"]>> | undefined;
-export async function workspace(page: Page) {
+export async function workspace(page: Page, guided = false) {
   if (sessionCookies) {
     await page.context().addCookies(sessionCookies);
     await page.goto("/app/projetos");
@@ -57,6 +57,55 @@ export async function workspace(page: Page) {
     if (!response.ok) throw new Error(await response.text());
     return response.json();
   });
+  if (!guided)
+    await page.evaluate(async (project) => {
+      const me = await (await fetch("/api/v1/me")).json();
+      const headers = {
+        "Content-Type": "application/json",
+        "X-CSRF-Token": me.csrf_token,
+      };
+      const operations = await (
+        await fetch(`/api/v1/operations?project_id=${project.id}&latest=true`)
+      ).json();
+      for (const op of operations.items) {
+        if (
+          op.state === "succeeded" &&
+          op.result_ref.candidate &&
+          !op.result_ref.applied_revision_id &&
+          !op.result_ref.discarded_at
+        )
+          await fetch(
+            `/api/v1/projects/${project.id}/proposals/${op.id}/discard`,
+            {
+              method: "POST",
+              headers: { ...headers, "Idempotency-Key": crypto.randomUUID() },
+              body: "{}",
+            },
+          );
+      }
+      const draft = await (
+        await fetch(`/api/v1/projects/${project.id}/build-draft`)
+      ).json();
+      const response = await fetch(
+        `/api/v1/projects/${project.id}/build-draft`,
+        {
+          method: "PUT",
+          headers: {
+            ...headers,
+            "Idempotency-Key": crypto.randomUUID(),
+            "If-Match": String(draft.version),
+          },
+          body: JSON.stringify({
+            stage: "review",
+            objective: project.objective,
+            message_text: "",
+            attachments: [],
+            recommendation_id: null,
+          }),
+        },
+      );
+      if (!response.ok) throw Error(await response.text());
+    }, project);
   await page.goto(`/app/projetos/${project.id}`);
   await expect(
     page.getByRole("tree", { name: "Arquivos do projeto" }),

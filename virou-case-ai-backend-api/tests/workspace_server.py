@@ -20,7 +20,6 @@ from viracase.infrastructure.sources import SourceStore
 from viracase.infrastructure.worker import Worker
 from viracase.interfaces.api import create_app
 
-
 if os.environ.get("VIRA_E2E_ISOLATED") != "true":
     raise RuntimeError("Use somente no laboratório E2E isolado.")
 
@@ -64,7 +63,7 @@ engine, sessions = database(config.database_url)
 Base.metadata.create_all(engine)
 with engine.begin() as connection:
     connection.execute(text("CREATE TABLE alembic_version (version_num VARCHAR(32) PRIMARY KEY)"))
-    connection.execute(text("INSERT INTO alembic_version VALUES ('0003')"))
+    connection.execute(text("INSERT INTO alembic_version VALUES ('0006')"))
 repo = Repository(sessions, SourceStore(config.source_root), config)
 with sessions.begin() as db:
     account = Account(

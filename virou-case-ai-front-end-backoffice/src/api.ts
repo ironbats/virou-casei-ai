@@ -27,11 +27,16 @@ export async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
   }
   return response.status === 204 ? (undefined as T) : await response.json();
 }
-export async function command<T>(path: string, payload: unknown): Promise<T> {
+export async function command<T>(
+  path: string,
+  payload: unknown,
+  method = "POST",
+  version?: number,
+): Promise<T> {
   const body = JSON.stringify(payload),
     bytes = await crypto.subtle.digest(
       "SHA-256",
-      new TextEncoder().encode(actor + path + body),
+      new TextEncoder().encode(actor + method + path + body + (version ?? "")),
     );
   const slot =
     "vira-admin-intent:" +
@@ -41,9 +46,12 @@ export async function command<T>(path: string, payload: unknown): Promise<T> {
   const key = sessionStorage.getItem(slot) ?? crypto.randomUUID();
   sessionStorage.setItem(slot, key);
   const result = await api<T>(path, {
-    method: "POST",
+    method,
     body,
-    headers: { "Idempotency-Key": key },
+    headers: {
+      "Idempotency-Key": key,
+      ...(version === undefined ? {} : { "If-Match": String(version) }),
+    },
   });
   sessionStorage.removeItem(slot);
   return result;

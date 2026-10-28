@@ -21,8 +21,8 @@ import type {
   LearningDraft,
   Page,
   Project,
-  ProjectDraft,
 } from "../shared/types";
+import type { BuildDraft } from "./guidedTypes";
 import { useDraft } from "./useDraft";
 import { DraftConflict } from "./DraftConflict";
 
@@ -200,8 +200,7 @@ function GuideApplication({ slug }: { slug: string }) {
     [busy, setBusy] = useState(false),
     [error, setError] = useState<unknown>(null),
     [copied, setCopied] = useState(false),
-    [replacePrompt, setReplacePrompt] = useState(false),
-    [destination, setDestination] = useState<Draft<ProjectDraft> | null>(null);
+    [replacePrompt, setReplacePrompt] = useState(false);
   const projects = useLoad(
     () =>
       api<
@@ -262,15 +261,15 @@ function GuideApplication({ slug }: { slug: string }) {
       setBusy(false);
     }
   }
-  async function transfer(mode: "append" | "replace", version: number) {
+  async function transfer(version: number) {
     await draft.flush();
     const result = await command<{ project_id: string }>(
-      `/learning/guides/${slug}/transfer`,
+      `/learning/guides/${slug}/attach`,
       {
         project_id: target,
         source_version: draft.version(),
         target_version: version,
-        mode,
+        mode: "append",
       },
     );
     navigate(`/app/projetos/${result.project_id}?prompt=guide`);
@@ -483,7 +482,6 @@ function GuideApplication({ slug }: { slug: string }) {
           value={target}
           onChange={(e) => {
             setTarget(e.target.value);
-            setDestination(null);
           }}
         >
           <option value="">Escolha um projeto</option>
@@ -524,19 +522,18 @@ function GuideApplication({ slug }: { slug: string }) {
           onClick={() =>
             void act(async () => {
               await draft.flush();
-              const remote = await api<Draft<ProjectDraft>>(
-                `/projects/${target}/draft`,
+              const remote = await api<Draft<BuildDraft>>(
+                `/projects/${target}/build-draft`,
               );
-              if (remote.data.prompt.trim()) setDestination(remote);
-              else await transfer("replace", remote.version);
+              await transfer(remote.version);
             })
           }
         >
           Levar rascunho para o projeto <ArrowRight size={16} />
         </button>
         <p className="small muted">
-          O texto será aberto na conversa para revisão. Envie no projeto quando
-          estiver pronto para usar IA.
+          Sua cópia será anexada ao pedido para revisão. A mensagem já escrita
+          será preservada. Envie no projeto quando estiver pronto para usar IA.
         </p>
       </div>
       {replacePrompt && (
@@ -562,48 +559,6 @@ function GuideApplication({ slug }: { slug: string }) {
               }}
             >
               Substituir prompt
-            </button>
-          </div>
-        </Modal>
-      )}
-      {destination && (
-        <Modal
-          title="Já existe um rascunho neste projeto"
-          close={() => setDestination(null)}
-        >
-          <div className="compare-grid">
-            <div>
-              <h3>Texto atual</h3>
-              <pre className="source-preview">{destination.data.prompt}</pre>
-            </div>
-            <div>
-              <h3>Texto do guia</h3>
-              <pre className="source-preview">{d.prompt}</pre>
-            </div>
-          </div>
-          <p>Escolha como transferir. Os arquivos do projeto não mudam.</p>
-          <ErrorNotice error={error} />
-          <div className="actions">
-            <button className="button" onClick={() => setDestination(null)}>
-              Cancelar
-            </button>
-            <button
-              className="button"
-              disabled={busy}
-              onClick={() =>
-                void act(() => transfer("append", destination.version))
-              }
-            >
-              Acrescentar ao rascunho
-            </button>
-            <button
-              className="button primary"
-              disabled={busy}
-              onClick={() =>
-                void act(() => transfer("replace", destination.version))
-              }
-            >
-              Substituir rascunho
             </button>
           </div>
         </Modal>

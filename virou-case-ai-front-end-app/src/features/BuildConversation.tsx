@@ -11,6 +11,7 @@ import {
 import { Link } from "react-router-dom";
 import { date, states } from "../shared/api";
 import type { Operation } from "../shared/types";
+import { Modal } from "../shared/ui";
 import { inProgress } from "./useProjectOperations";
 
 export function operationMessage(operation: Operation) {
@@ -44,6 +45,7 @@ export function BuildConversation({
   onFile,
   onReview,
   onAnswer,
+  onDiscard,
 }: {
   operations: Operation[];
   pid: string;
@@ -55,8 +57,13 @@ export function BuildConversation({
   onFile: (path: string) => void;
   onReview?: (operation: Operation) => void;
   onAnswer?: (operation: Operation) => void;
+  onDiscard?: (operation: Operation) => void;
 }) {
   const [now, setNow] = useState(Date.now());
+  const [snapshot, setSnapshot] = useState<{
+    title: string;
+    content: string;
+  } | null>(null);
   const log = useRef<HTMLDivElement>(null);
   const follow = useRef(true);
   const builds = operations
@@ -121,6 +128,19 @@ export function BuildConversation({
             <div className="build-request">
               <strong>Você</strong>
               <p>{operation.request_text || "Solicitação anterior"}</p>
+              {!!operation.attachment_snapshots?.length && (
+                <div className="sent-attachments">
+                  {operation.attachment_snapshots.map((a) => (
+                    <button
+                      className="button"
+                      key={a.id}
+                      onClick={() => setSnapshot(a)}
+                    >
+                      Ver conteúdo enviado · {a.title} · v{a.version}
+                    </button>
+                  ))}
+                </div>
+              )}
             </div>
             <div className="build-response">
               <div
@@ -256,6 +276,30 @@ export function BuildConversation({
                         ))}
                       </div>
                     )}
+                  {operation.result_ref.discarded_at && (
+                    <p>
+                      Proposta descartada. A revisão anterior foi preservada.
+                    </p>
+                  )}
+                  {operation.result_ref.candidate &&
+                    !operation.result_ref.applied_revision_id &&
+                    !operation.result_ref.discarded_at &&
+                    onDiscard && (
+                      <button
+                        className="button"
+                        disabled={busy}
+                        onClick={() => {
+                          if (
+                            confirm(
+                              "Descartar esta proposta sem alterar a revisão atual?",
+                            )
+                          )
+                            onDiscard(operation);
+                        }}
+                      >
+                        Descartar proposta
+                      </button>
+                    )}
                   <Link
                     className="text-button"
                     to={`/app/projetos/${pid}/historico`}
@@ -264,6 +308,7 @@ export function BuildConversation({
                   </Link>
                   {operation.result_ref.candidate &&
                     !operation.result_ref.applied_revision_id &&
+                    !operation.result_ref.discarded_at &&
                     onReview && (
                       <button
                         className="button primary"
@@ -304,6 +349,14 @@ export function BuildConversation({
           </article>
         );
       })}
+      {snapshot && (
+        <Modal
+          title={`Conteúdo enviado · ${snapshot.title}`}
+          close={() => setSnapshot(null)}
+        >
+          <pre className="source-preview">{snapshot.content}</pre>
+        </Modal>
+      )}
     </div>
   );
 }

@@ -102,7 +102,7 @@ export default app;
     else:
         cfg.update(main="src/entry.py", compatibility_flags=["python_workers"])
         files["src/entry.py"] = (
-            'from fastapi import FastAPI, Request\nfrom workers import WorkerEntrypoint\nimport asgi\n\napp = FastAPI()\n\n@app.get("/api/health")\nasync def health(request: Request):\n    env = request.scope["env"]\n    await env.DB.prepare("SELECT 1").first()\n    return {"ok": True, "database": True}\n\nclass Default(WorkerEntrypoint):\n    async def fetch(self, request):\n        return await asgi.fetch(app, request, self.env)\n'
+            'from fastapi import FastAPI, Request\nfrom workers import asgi\n\napp = FastAPI()\nDefault = asgi.entrypoint(app)\n\n@app.get("/api/health")\nasync def health(request: Request):\n    env = request.scope["env"]\n    await env.DB.prepare("SELECT 1").first()\n    return {"ok": True, "database": True}\n'
         )
         files["pyproject.toml"] = (
             '[project]\nname = "seu-projeto"\nversion = "1.0.0"\nrequires-python = ">=3.12"\ndependencies = ["fastapi"]\n\n[dependency-groups]\ndev = ["workers-py"]\n'

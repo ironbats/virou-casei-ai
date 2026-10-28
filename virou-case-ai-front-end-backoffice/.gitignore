@@ -3,3 +3,5 @@ dist/
 .env
 test-results/
 playwright-report/
+zip
+*.zip
