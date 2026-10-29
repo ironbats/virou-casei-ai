@@ -19,6 +19,7 @@ def configuration_rejection(reason_code, *, error_code="PROVIDER_CONFIGURATION_I
         "CREDENTIAL_STORE_UNAVAILABLE",
         "AI_CONFIGURATION_PENDING",
         "AI_PROVIDER_UNAVAILABLE",
+        "INVALID_AGENT_EXECUTION",
         "NOT_FOUND",
     }
     return ProviderRejected(

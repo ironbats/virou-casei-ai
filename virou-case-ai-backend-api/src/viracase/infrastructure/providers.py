@@ -1,13 +1,23 @@
+import json
 from datetime import datetime
 from decimal import Decimal
-import json
+
 import httpx
-from viracase.application.ports import ModelResult
-from viracase.domain.rules import RuleError, aware, cost, money, utcnow
-from viracase.infrastructure.provider_errors import ProviderRejected, configuration_rejection, rejection, log
+
 from viracase.application.conversation import response_schema
 from viracase.application.conversation_turn import turn_schema
-
+from viracase.application.ports import ModelResult
+from viracase.application.template_preparation import preparation_schema
+from viracase.domain.rules import RuleError, aware, cost, money, utcnow
+from viracase.infrastructure.agent_execution import execution_timeouts, validate_model_execution
+from viracase.infrastructure.integration_traces import (
+    observed_failure,
+    observed_request,
+    observed_response,
+    observed_retry,
+)
+from viracase.infrastructure.provider_errors import ProviderRejected, configuration_rejection, log, rejection
+from viracase.infrastructure.workflow_logging import safe_fields
 
 ALLOWED = {
     "openai": {"gpt-6-luna", "gpt-6.1-sol", "gpt-6-astra"},
@@ -48,7 +58,9 @@ class ModelCatalog:
                     for k in ("input_usd_per_million", "cached_usd_per_million", "output_usd_per_million")
                 ):
                     continue
-                if not 1 <= int(p["max_output_tokens"]) <= 32000:
+                try:
+                    validate_model_execution(p["provider"], p["model"], p)
+                except RuleError:
                     continue
                 if not getattr(self.config, p["provider"] + "_api_key", ""):
                     continue
@@ -57,8 +69,13 @@ class ModelCatalog:
         except (OSError, ValueError, KeyError, TypeError):
             return result
 
-    def resolve(self, prompt):
+    def resolve(self, prompt, model_id=None):
         policies = self.eligible()
+        if model_id is not None:
+            policies = [
+                policy for policy in policies
+                if policy.get("model_id", policy["provider"] + ":" + policy["model"]) == model_id
+            ]
         if not policies:
             raise RuleError(
                 "COMMERCIAL_CONFIGURATION_PENDING",
@@ -89,6 +106,11 @@ class HttpModelGateway:
 
     def generate(self, policy, prompt, probe=False):
         provider, model = policy["provider"], policy["model"]
+        try:
+            execution = validate_model_execution(provider, model, policy) or {}
+        except RuleError as exc:
+            raise configuration_rejection(exc.code) from None
+        request_timeout, connect_timeout = execution_timeouts(policy, self.config.provider_timeout)
         managed = bool(policy.get("connection_id"))
         if managed:
             if not self.registry:
@@ -111,12 +133,26 @@ class HttpModelGateway:
                 "service_tier": "default",
                 "text": {"format": {"type": "json_object"}},
             }
-            if policy.get("generation_contract_version") in {3, 4}:
+            if policy.get("template_preparation_contract") and model in ALLOWED["openai"]:
+                body["reasoning"] = {"effort": "low"}
+            if execution.get("thinking_mode") == "provider_default":
+                body.pop("reasoning", None)
+            if execution.get("reasoning_effort") is not None:
+                body["reasoning"] = {"effort": execution["reasoning_effort"]}
+            for option in ("temperature", "top_p"):
+                if execution.get(option) is not None:
+                    body[option] = execution[option]
+            if policy.get("generation_contract_version") in {3, 4} or policy.get("template_preparation_contract"):
                 body["text"]["format"] = {
                     "type": "json_schema",
-                    "name": "project_changes",
+                    "name": "template_fields" if policy.get("template_preparation_contract") else "project_changes",
                     "strict": True,
-                    "schema": turn_schema()
+                    "schema": preparation_schema(
+                        policy["template_preparation_contract"],
+                        policy.get("preparation_source_refs"),
+                        policy.get("preparation_selection_schema"),
+                        policy.get("preparation_proposal_schema"),
+                    ) if policy.get("template_preparation_contract") else turn_schema()
                     if policy.get("generation_contract_version") == 4
                     else response_schema(),
                 }
@@ -137,7 +173,22 @@ class HttpModelGateway:
                 "gemini-3.5-flash-lite",
             }:
                 body["generationConfig"]["thinkingConfig"] = {"thinkingLevel": "LOW"}
-            if policy.get("generation_contract_version") in {3, 4}:
+            if policy.get("template_preparation_contract"):
+                if model == "gemini-2.5-flash":
+                    body["generationConfig"]["thinkingConfig"] = {"thinkingBudget": 0}
+                elif model in ALLOWED["gemini"]:
+                    body["generationConfig"]["thinkingConfig"] = {"thinkingLevel": "LOW"}
+            mode = execution.get("thinking_mode", "auto")
+            if mode == "provider_default":
+                body["generationConfig"].pop("thinkingConfig", None)
+            elif mode == "budget":
+                body["generationConfig"]["thinkingConfig"] = {"thinkingBudget": execution["thinking_budget"]}
+            elif mode == "level":
+                body["generationConfig"]["thinkingConfig"] = {"thinkingLevel": execution["thinking_level"].upper()}
+            for option, wire_name in (("temperature", "temperature"), ("top_p", "topP")):
+                if execution.get(option) is not None:
+                    body["generationConfig"][wire_name] = execution[option]
+            if policy.get("generation_contract_version") in {3, 4} or policy.get("template_preparation_contract"):
 
                 def gemini_schema(value):
                     if isinstance(value, dict):
@@ -154,20 +205,24 @@ class HttpModelGateway:
                     return value
 
                 body["generationConfig"]["responseSchema"] = gemini_schema(
-                    turn_schema() if policy.get("generation_contract_version") == 4 else response_schema()
+                    preparation_schema(
+                        policy["template_preparation_contract"],
+                        policy.get("preparation_source_refs"),
+                        policy.get("preparation_selection_schema"),
+                        policy.get("preparation_proposal_schema"),
+                    ) if policy.get("template_preparation_contract") else turn_schema() if policy.get("generation_contract_version") == 4 else response_schema()
                 )
         try:
             with httpx.Client(
-                timeout=httpx.Timeout(self.config.provider_timeout, connect=10),
+                timeout=httpx.Timeout(request_timeout, connect=connect_timeout),
                 transport=self.transport,
                 follow_redirects=False,
                 trust_env=False,
+                event_hooks={"request": [observed_request]},
             ) as client:
                 for dispatch in range(2):
                     with client.stream("POST", url, headers=headers, json=body) as response:
                         rejected = response.status_code in {400, 401, 403, 404, 413, 422, 429}
-                        if response.status_code != 200 and not rejected:
-                            raise ProviderUncertain("provider_status")
                         raw = bytearray()
                         for chunk in response.iter_bytes():
                             raw.extend(chunk)
@@ -176,13 +231,25 @@ class HttpModelGateway:
                                     raw = bytearray()
                                     break
                                 raise ProviderUncertain("response_limit")
+                        observed_response(response, raw)
+                        if response.status_code != 200 and not rejected:
+                            raise ProviderUncertain("provider_status")
                         if not rejected:
                             break
                         exc = rejection(response.status_code, raw)
                         field = exc.diagnostic.get("unsupported_field")
                         optional = body.get("generationConfig", {})
-                        if dispatch == 0 and field in optional:
+                        if (
+                            dispatch == 0
+                            and field in optional
+                            and not (field == "thinkingConfig" and execution.get("thinking_mode") in {"budget", "level"})
+                            and not (
+                                field == "responseSchema"
+                                and policy.get("template_preparation_contract") in {3, 4}
+                            )
+                        ):
                             optional.pop(field)
+                            observed_retry("UNSUPPORTED_OPTIONAL_PARAMETER")
                             log.warning(
                                 json.dumps({"event": "provider_parameter_fallback", **exc.diagnostic})
                             )
@@ -190,6 +257,17 @@ class HttpModelGateway:
                         raise exc
             data = json.loads(raw)
             output_error = None
+            diagnostics = {"http_status": 200, "provider_dispatches": dispatch + 1}
+            if provider == "gemini":
+                thinking = body.get("generationConfig", {}).get("thinkingConfig", {})
+                diagnostics.update(
+                    effective_thinking_mode="budget" if "thinkingBudget" in thinking else
+                    "level" if "thinkingLevel" in thinking else "provider_default",
+                    effective_thinking_budget=thinking.get("thinkingBudget"),
+                    effective_thinking_level=thinking.get("thinkingLevel"),
+                )
+            else:
+                diagnostics["effective_reasoning_effort"] = body.get("reasoning", {}).get("effort", "provider_default")
             if provider == "openai":
                 u = data["usage"]
                 details = u.get("input_tokens_details", {})
@@ -209,6 +287,13 @@ class HttpModelGateway:
                 )
                 external = data.get("id")
                 reason = (data.get("incomplete_details") or {}).get("reason")
+                reasoning_tokens = (u.get("output_tokens_details") or {}).get("reasoning_tokens", 0)
+                diagnostics.update(
+                    finish_reason=reason or data.get("status"),
+                    response_status=data.get("status"),
+                    reasoning_tokens=reasoning_tokens,
+                    visible_output_tokens=max(0, usage["output"] - reasoning_tokens),
+                )
                 if data.get("status") == "incomplete":
                     output_error = (
                         "GENERATION_TRUNCATED" if reason == "max_output_tokens" else "GENERATION_BLOCKED"
@@ -238,13 +323,23 @@ class HttpModelGateway:
                 )
                 external = data.get("responseId")
                 reason = candidate.get("finishReason")
+                diagnostics.update(
+                    finish_reason=reason,
+                    reasoning_tokens=u.get("thoughtsTokenCount", 0),
+                    visible_output_tokens=u.get("candidatesTokenCount", 0),
+                )
                 if reason == "MAX_TOKENS":
                     output_error = "GENERATION_TRUNCATED"
                 elif reason not in {None, "STOP"} or data.get("promptFeedback", {}).get("blockReason"):
                     output_error = "GENERATION_BLOCKED"
             cost(policy, usage)
-            return ModelResult(text, usage, external, output_error)
+            diagnostics["output_characters"] = len(text)
+            return ModelResult(text, usage, external, output_error, safe_fields(diagnostics))
         except ProviderRejected:
             raise
+        except ProviderUncertain:
+            observed_failure()
+            raise
         except (httpx.HTTPError, KeyError, ValueError, TypeError, RuleError) as exc:
+            observed_failure()
             raise ProviderUncertain(type(exc).__name__) from None

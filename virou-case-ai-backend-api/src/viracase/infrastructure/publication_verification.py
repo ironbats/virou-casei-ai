@@ -7,6 +7,7 @@ from uuid import uuid4
 import httpx
 
 from viracase.domain.rules import RuleError, utcnow
+from viracase.infrastructure.publication_build_diagnostics import BuildFailure
 from viracase.infrastructure.publication_logging import emit, safe_text
 
 VERIFICATION_FORMAT_VERSION = 2
@@ -244,6 +245,8 @@ def failure_record(exc, stage, stack=None, secrets=()):
     }
     if isinstance(exc, VerificationFailure):
         record["details"] = exc.diagnostic
+    if isinstance(exc, BuildFailure):
+        record["build"] = exc.diagnostic
     provider = getattr(exc, "provider_diagnostic", None)
     if isinstance(provider, dict):
         record["provider"] = provider

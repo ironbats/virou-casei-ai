@@ -399,3 +399,20 @@
     padding: 12px 10px;
   }
 }
+.agent-configuration-field {
+  display: grid;
+  align-content: start;
+  gap: 6px;
+  min-width: 0;
+}
+.agent-configuration-field label {
+  margin: 0;
+}
+.agent-configuration-field input,
+.agent-configuration-field select {
+  width: 100%;
+  min-width: 0;
+}
+.agent-configuration-field .field-help {
+  margin: 0;
+}

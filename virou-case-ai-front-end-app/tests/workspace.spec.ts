@@ -11,10 +11,10 @@ test.skip(
   "Use backend/script/test-workspace.py para iniciar o laboratório de construção.",
 );
 
-import { workspace } from "./workspaceHelper";
+import { reviewRequest, showBuildHistory, workspace } from "./workspaceHelper";
 
 async function send(page: Page, request: string) {
-  await page.getByLabel("Pedido para a IA").fill(request);
+  await reviewRequest(page, request);
   await page
     .getByRole("button", { name: "Enviar para construir", exact: true })
     .click();
@@ -56,6 +56,7 @@ test("pedido, progresso real, aplicação revisada e histórico após recarga", 
   await expect(turn).toContainText("Estrutura dos arquivos conferida.");
   await expect(page.locator("body")).not.toContainText(/gpt-|gemini|openai/i);
   await page.reload();
+  await showBuildHistory(page);
   await expect(page.locator(".build-turn").last()).toContainText(
     "Melhorar o título e o conteúdo da página inicial",
   );
@@ -136,6 +137,7 @@ test("edição em outra sessão durante construção preserva rascunho e exige c
   await expect(page.locator(".code-editor")).toHaveValue(
     /Minha edição local não pode ser perdida/,
   );
+  await showBuildHistory(page);
   await page
     .locator(".build-turn")
     .last()
@@ -144,7 +146,9 @@ test("edição em outra sessão durante construção preserva rascunho e exige c
   await expect(
     page.getByRole("button", { name: "Aplicar alterações revisadas" }),
   ).toBeDisabled();
-  await page.getByRole("button", { name: "Fechar", exact: true }).click();
+  await page
+    .getByRole("button", { name: "Fechar revisão", exact: true })
+    .click();
 });
 
 test("resposta truncada preserva revisão e permite reutilizar pedido", async ({
@@ -163,12 +167,15 @@ test("resposta truncada preserva revisão e permite reutilizar pedido", async ({
   await expect(page.locator(".code-editor")).toHaveValue(original);
   page.once("dialog", (d) => d.accept());
   await turn.getByRole("button", { name: "Reutilizar pedido" }).click();
-  await expect(page.getByLabel("Pedido para a IA")).toHaveValue(
-    "SIMULAR_TRUNCADO para validar recuperação do pedido",
-  );
+  await expect(
+    page.getByLabel("O que vamos fazer?", { exact: true }),
+  ).toHaveValue("SIMULAR_TRUNCADO para validar recuperação do pedido");
+  await expect(
+    page.getByRole("button", { name: "Preparar construção", exact: true }),
+  ).toBeEnabled();
   await expect(
     page.getByRole("button", { name: "Enviar para construir", exact: true }),
-  ).toBeEnabled();
+  ).toHaveCount(0);
 });
 
 test("cancelamento durante construção não aplica os arquivos", async ({
@@ -220,7 +227,7 @@ test("conversa acessível em mobile, tablet e desktop sem overflow", async ({
   for (const width of [320, 375, 768, 1024, 1440]) {
     await page.setViewportSize({ width, height: 900 });
     if (width <= 900)
-      await page.getByRole("tab", { name: "Conversa", exact: true }).click();
+      await page.getByRole("tab", { name: "Construção", exact: true }).click();
     await expect(page.locator(".guided-build")).toBeVisible();
     expect(
       await page.evaluate(
@@ -246,7 +253,7 @@ test("conversa acessível em mobile, tablet e desktop sem overflow", async ({
       });
   }
   await page.setViewportSize({ width: 375, height: 900 });
-  await page.getByRole("tab", { name: "Conversa", exact: true }).click();
+  await page.getByRole("tab", { name: "Construção", exact: true }).click();
   const audit = await new AxeBuilder({ page })
     .include(".ide-layout")
     .withTags(["wcag2a", "wcag2aa"])
@@ -349,7 +356,21 @@ test("guia SDD, edição manual, recarga e transferência sem gerar IA", async (
     .getByRole("button", { name: "Levar rascunho para o projeto" })
     .click();
   await expect(page).toHaveURL(new RegExp(`/app/projetos/${project.id}`));
-  await expect(page.getByLabel("Pedido para a IA")).toHaveValue("");
+  await expect(
+    page.getByLabel("O que vamos fazer?", { exact: true }),
+  ).toHaveValue("");
+  await page
+    .getByLabel("O que vamos fazer?", { exact: true })
+    .fill("Implementar o organizador de tarefas com o guia revisado");
+  await page
+    .getByRole("button", { name: "Preparar construção", exact: true })
+    .click();
+  await expect(
+    page.getByText("1 template selecionado", { exact: true }),
+  ).toBeVisible();
+  await page
+    .getByRole("button", { name: "Revisar pedido", exact: true })
+    .click();
   await expect(page.locator(".attachment-card")).toHaveCount(1);
   await page.getByRole("button", { name: "Abrir", exact: true }).click();
   await expect(page.getByRole("dialog")).toContainText(
@@ -362,8 +383,16 @@ test("guia SDD, edição manual, recarga e transferência sem gerar IA", async (
   await page
     .getByRole("button", { name: "Levar rascunho para o projeto" })
     .click();
+  await expect(
+    page.getByText("1 template selecionado", { exact: true }),
+  ).toBeVisible();
+  await page
+    .getByRole("button", { name: "Revisar pedido", exact: true })
+    .click();
   await expect(page.locator(".attachment-card")).toHaveCount(1);
-  await expect(page.getByLabel("Pedido para a IA")).toHaveValue("");
+  await expect(page.locator(".guided-objective")).toHaveText(
+    "Implementar o organizador de tarefas com o guia revisado",
+  );
   expect(generations).toBe(0);
 });
 
@@ -392,7 +421,7 @@ test("conflito de rascunho preserva as duas versões e permite comparação", as
     if (!r.ok) throw new Error(await r.text());
   }, project.id);
   await page
-    .getByLabel("Pedido para a IA")
+    .getByLabel("O que vamos fazer?", { exact: true })
     .fill("Meu texto nesta sessão deve ser preservado");
   await expect(page.getByRole("dialog")).toContainText(
     "Texto salvo em outra sessão",
@@ -405,9 +434,9 @@ test("conflito de rascunho preserva as duas versões e permite comparação", as
     page.locator(".guided-build").getByText("Rascunho salvo", { exact: true }),
   ).toBeVisible();
   await page.reload();
-  await expect(page.getByLabel("Pedido para a IA")).toHaveValue(
-    "Meu texto nesta sessão deve ser preservado",
-  );
+  await expect(
+    page.getByLabel("O que vamos fazer?", { exact: true }),
+  ).toHaveValue("Meu texto nesta sessão deve ser preservado");
 });
 
 test("Aprender em mobile preserva filtros e rascunho", async ({
@@ -496,14 +525,18 @@ test("pedido acima do limite é preservado e não dispara geração", async ({
   page.on("request", (r) => {
     if (r.method() === "POST" && r.url().includes("/messages")) posts++;
   });
-  await page.getByLabel("Pedido para a IA").fill(text);
-  await expect(page.getByLabel("Pedido para a IA")).toHaveValue(text);
+  await page.getByLabel("O que vamos fazer?", { exact: true }).fill(text);
   await expect(
-    page.getByRole("button", { name: "Enviar para construir", exact: true }),
+    page.getByLabel("O que vamos fazer?", { exact: true }),
+  ).toHaveValue(text);
+  await expect(
+    page.getByRole("button", { name: "Preparar construção", exact: true }),
   ).toBeDisabled();
-  await page.getByLabel("Pedido para a IA").press("Control+Enter");
+  await page
+    .getByLabel("O que vamos fazer?", { exact: true })
+    .press("Control+Enter");
   expect(posts).toBe(0);
-  await page.getByLabel("Pedido para a IA").fill("");
+  await page.getByLabel("O que vamos fazer?", { exact: true }).fill("");
   await expect(
     page.getByText("Rascunho salvo", { exact: false }).first(),
   ).toBeVisible();
@@ -523,9 +556,14 @@ test("pergunta de esclarecimento, resposta curta e aplicação com contexto", as
   await expect(page.locator(".code-editor")).toHaveValue(original);
   await page.reload();
   await expect(
-    page.getByText("Respondendo à pergunta da conversa.", { exact: false }),
+    page.getByLabel("Sua resposta ao agente", { exact: true }),
   ).toBeVisible();
-  const answered = await send(page, "sim");
+  await page.getByLabel("Sua resposta ao agente", { exact: true }).fill("sim");
+  await page
+    .getByRole("button", { name: "Enviar resposta", exact: true })
+    .click();
+  const answered = page.locator(".build-turn").last();
+  await expect(answered.locator(".build-request")).toContainText("sim");
   await expect(answered).toHaveAttribute("data-state", "succeeded");
   await apply(page, answered);
   await page.getByRole("button", { name: "Usar texto simples" }).click();
@@ -548,7 +586,10 @@ test("corrige resposta inválida e preserva o próximo pedido digitado durante a
   const turn = await send(page, "RECUPERAR_FORMATO melhorar a homepage");
   await expect(turn).toHaveAttribute("data-state", "running");
   await page
-    .getByLabel("Pedido para a IA")
+    .getByRole("button", { name: "Nova construção", exact: true })
+    .click();
+  await page
+    .getByLabel("O que vamos fazer?", { exact: true })
     .fill("Meu próximo pedido ainda não deve ser enviado");
   await expect(turn).toContainText("Ajustando a resposta recebida", {
     timeout: 12000,
@@ -557,18 +598,19 @@ test("corrige resposta inválida e preserva o próximo pedido digitado durante a
     timeout: 15000,
   });
   await expect(page.locator(".code-editor")).toHaveValue(original);
+  await showBuildHistory(page);
   await apply(page, turn);
-  await expect(page.getByLabel("Pedido para a IA")).toHaveValue(
-    "Meu próximo pedido ainda não deve ser enviado",
-  );
+  await expect(
+    page.getByLabel("O que vamos fazer?", { exact: true }),
+  ).toHaveValue("Meu próximo pedido ainda não deve ser enviado");
   await expect(page.getByRole("dialog")).toHaveCount(0);
   await page.reload();
-  await expect(page.getByLabel("Pedido para a IA")).toHaveValue(
-    "Meu próximo pedido ainda não deve ser enviado",
-  );
+  await expect(
+    page.getByLabel("O que vamos fazer?", { exact: true }),
+  ).toHaveValue("Meu próximo pedido ainda não deve ser enviado");
 });
 
-test("salva edição manual ao enviar e exige aplicação da proposta", async ({
+test("salva edição manual explicitamente antes da preparação e exige aplicação da proposta", async ({
   page,
 }) => {
   await workspace(page);
@@ -577,6 +619,9 @@ test("salva edição manual ao enviar e exige aplicação da proposta", async ({
   await editor.fill(
     source.replace("</body>", "<p>Conteúdo manual preservado</p></body>"),
   );
+  await page
+    .getByRole("button", { name: "Salvar revisão do projeto", exact: true })
+    .click();
   const turn = await send(
     page,
     "Aprimorar a página preservando o conteúdo manual",
@@ -608,10 +653,6 @@ test("retoma a atualização da IDE após falha transitória na leitura da nova 
     "Melhorar homepage e recuperar sincronização da IDE",
   );
   await expect(turn).toHaveAttribute("data-state", "succeeded");
-  await turn
-    .getByRole("button", { name: "Revisar alterações", exact: true })
-    .click();
-  await expect(page.getByRole("alert")).toBeVisible();
   await apply(page, turn);
   await expect(page.locator(".code-editor")).not.toHaveValue(original, {
     timeout: 20000,
@@ -634,14 +675,13 @@ test("resultado incerto bloqueia reenvio e persiste após recarga", async ({
     turn.getByRole("button", { name: "Reutilizar pedido" }),
   ).toHaveCount(0);
   await page.reload();
+  await showBuildHistory(page);
   await expect(page.locator(".build-turn").last()).toHaveAttribute(
     "data-state",
     "reconciling",
   );
-  await page
-    .getByLabel("Pedido para a IA")
-    .fill("Novo pedido que precisa aguardar a apuração");
+  await reviewRequest(page, "Novo pedido que precisa aguardar a apuração");
   await expect(
-    page.getByRole("button", { name: "Enviar após concluir" }),
+    page.getByRole("button", { name: "Enviar para construir", exact: true }),
   ).toBeDisabled();
 });

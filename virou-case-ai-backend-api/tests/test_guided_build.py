@@ -44,17 +44,40 @@ def save_request(guided, actor, project, attachments=True):
     return data
 
 
-def send_request(system, guided, actor, project, key="send", version=1):
+def send_request(system, guided, actor, project, key="send", version=None):
+    requests = getattr(guided, "test_send_requests", {})
+    if key in requests and version is None:
+        request = requests[key]
+    else:
+        current = guided.get(actor, project["id"])
+        if version is None:
+            if not current["data"].get("prepared_fingerprint"):
+                Recommendations(guided).recommend(
+                    actor, project["id"], "recommend-" + key, {"expected_draft_revision": current["version"]}
+                )
+                current = guided.get(actor, project["id"])
+            if not current["data"].get("review_snapshot"):
+                current = guided.review(
+                    actor,
+                    project["id"],
+                    "review-" + key,
+                    {"expected_draft_revision": current["version"], "confirm_empty": True},
+                )
+        request = {
+            "expected_draft_revision": current["version"] if version is None else version,
+            "base_project_revision": project["current_revision_id"],
+            "policy_version": "2026-10-v1",
+            "reply_to": None,
+            "review_snapshot_hash": (current["data"].get("review_snapshot") or {}).get("hash", "0" * 64),
+        }
+        if version is None:
+            requests[key] = request
+            guided.test_send_requests = requests
     return guided.send(
         actor,
         project["id"],
         key,
-        {
-            "expected_draft_revision": version,
-            "base_project_revision": project["current_revision_id"],
-            "policy_version": "2026-10-v1",
-            "reply_to": None,
-        },
+        request,
         GenerationService(system["repo"], system["catalog"]),
     )
 
@@ -66,13 +89,13 @@ def test_snapshot_atomic_idempotent_and_explicit_apply(system, guided):
     op = send_request(system, flow, actor, project)
     assert send_request(system, flow, actor, project)["id"] == op["id"]
     next_draft = flow.get(actor, project["id"])
-    assert next_draft["version"] == 2
+    assert next_draft["version"] == 5
     assert next_draft["data"]["message_text"] == ""
     assert not next_draft["data"]["attachments"][0]["enabled"]
     edited = deepcopy(next_draft["data"])
     edited["attachments"][0]["edited_content"] = "Uma edição posterior preservada"
     edited["message_text"] = "Próximo pedido independente"
-    flow.save(actor, project["id"], "later", 2, edited)
+    flow.save(actor, project["id"], "later", next_draft["version"], edited)
     gateway = Gateway()
     assert Worker(system["repo"], gateway, system["catalog"]).tick(op["id"])
     result = system["repo"].operation(actor, op["id"])
@@ -85,8 +108,8 @@ def test_snapshot_atomic_idempotent_and_explicit_apply(system, guided):
         system["repo"].project(actor, project["id"])["current_revision_id"] == project["current_revision_id"]
     )
     with pytest.raises(RuleError, match="Revise e aplique"):
-        send_request(system, flow, actor, project, "next", 3)
-    assert flow.get(actor, project["id"])["version"] == 3
+        send_request(system, flow, actor, project, "next")
+    assert flow.get(actor, project["id"])["data"]["stage"] == "review"
     applied = flow.drafts.apply(actor, project["id"], op["id"], "apply", project["version"])
     assert system["repo"].project(actor, project["id"])["current_revision_id"] == applied["revision_id"]
     with system["repo"].sessions() as db:
@@ -102,7 +125,7 @@ def test_conflict_and_invalid_attachment_never_reserve_or_start(system, guided):
     with pytest.raises(RuleError) as caught:
         send_request(system, flow, actor, project, version=2)
     assert caught.value.code == "DRAFT_CONFLICT"
-    data["attachments"][0]["edited_content"] = "Campo {{pendente}}"
+    data["attachments"][0]["edited_content"] = "Campo {{objective}}"
     flow.save(actor, project["id"], "save-pending", 1, data)
     with pytest.raises(RuleError) as caught:
         send_request(system, flow, actor, project, version=2)
@@ -119,9 +142,9 @@ def test_second_generation_blocked_and_discard_preserves_revision(system, guided
     op = send_request(system, flow, actor, project)
     next_draft = flow.get(actor, project["id"])["data"]
     next_draft["message_text"] = "Outro pedido"
-    flow.save(actor, project["id"], "next", 2, next_draft)
+    flow.save(actor, project["id"], "next", flow.get(actor, project["id"])["version"], next_draft)
     with pytest.raises(RuleError) as caught:
-        send_request(system, flow, actor, project, "other", 3)
+        send_request(system, flow, actor, project, "other")
     assert caught.value.code == "OPERATION_CONFLICT"
     Worker(system["repo"], Gateway(), system["catalog"]).tick(op["id"])
     flow.discard(actor, project["id"], op["id"], "discard")
@@ -130,7 +153,7 @@ def test_second_generation_blocked_and_discard_preserves_revision(system, guided
     assert (
         system["repo"].project(actor, project["id"])["current_revision_id"] == project["current_revision_id"]
     )
-    assert send_request(system, flow, actor, project, "new-after-discard", 3)["state"] == "queued"
+    assert send_request(system, flow, actor, project, "new-after-discard")["state"] == "queued"
 
 
 def test_learning_transfer_uses_versioned_catalog_and_preserves_message(system, guided):
@@ -170,7 +193,7 @@ def test_learning_transfer_uses_versioned_catalog_and_preserves_message(system, 
     )
     target = flow.get(actor, project["id"])
     assert target["data"]["message_text"] == "Melhore a página inicial"
-    assert target["data"]["stage"] == "review"
+    assert target["data"]["stage"] == "idea"
     assert target["data"]["attachments"][0]["source_version_id"] == version["version_id"]
     assert target["data"]["attachments"][0]["edited_content"] == "Cópia pessoal completa"
     assert flow.templates.version(actor, template["version_id"])["content"] == template["content"]
@@ -289,7 +312,7 @@ def test_context_config_enforced_before_reservation(system, guided):
     )
     before = system["repo"].wallet(actor, True)
     with pytest.raises(RuleError) as caught:
-        send_request(system, flow, actor, project, version=2)
+        send_request(system, flow, actor, project)
     assert caught.value.code == "CONTEXT_LIMIT_EXCEEDED"
     assert system["repo"].wallet(actor, True) == before
-    assert flow.get(actor, project["id"])["version"] == 2
+    assert flow.get(actor, project["id"])["data"]["stage"] == "review"

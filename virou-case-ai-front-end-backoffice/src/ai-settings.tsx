@@ -7,6 +7,13 @@ import {
 } from "react";
 import { Cpu, Plus, RefreshCw, ShieldCheck, X } from "lucide-react";
 import { api, command, date } from "./api";
+import { useRemote } from "./integration-ui";
+import type { AgentConfiguration } from "./agent-configuration-fields";
+import {
+  ModelExecutionFields,
+  modelExecutionChanged,
+  modelExecutionPayload,
+} from "./model-execution-fields";
 
 type Model = {
   id: string;
@@ -25,6 +32,7 @@ type Model = {
   effective_at: string;
   valid_until: string;
   max_output_tokens: number;
+  execution?: Record<string, unknown> | null;
 };
 type Connection = {
   id: string;
@@ -107,7 +115,17 @@ function Modal({
     </dialog>
   );
 }
-export function AISettings({ refreshToken }: { refreshToken: number }) {
+export function AISettings({
+  refreshToken,
+  onChanged,
+}: {
+  refreshToken: number;
+  onChanged?: () => void;
+}) {
+  const configuration = useRemote<AgentConfiguration>(
+    "/ai/configuration-schema",
+    refreshToken,
+  );
   const [connections, setConnections] = useState<Connection[]>([]),
     [loading, setLoading] = useState(true);
   const [error, setError] = useState(""),
@@ -258,11 +276,15 @@ export function AISettings({ refreshToken }: { refreshToken: number }) {
       } else if (editor.kind === "model") {
         const c = editor.connection!,
           m = editor.model;
+        if (!configuration.data || configuration.error)
+          throw new Error("Carregue os parâmetros do modelo antes de salvar.");
+        const execution = modelExecutionPayload(f, c.provider);
+        const executionChanged = modelExecutionChanged(m?.execution, execution);
         await command(modelPath(c, m), {
           name: get("name"),
           model: get("model"),
           expected_version: m?.version ?? null,
-          enabled: f.has("enabled"),
+          enabled: f.has("enabled") && !executionChanged,
           input_usd_per_million: get("input_usd_per_million"),
           cached_usd_per_million: get("cached_usd_per_million"),
           output_usd_per_million: get("output_usd_per_million"),
@@ -272,10 +294,13 @@ export function AISettings({ refreshToken }: { refreshToken: number }) {
           effective_at: new Date(get("effective_at")).toISOString(),
           valid_until: new Date(get("valid_until")).toISOString(),
           max_output_tokens: Number(get("max_output_tokens")),
+          execution,
           reason: "Configuração administrativa de modelo",
         });
         setMessage(
-          "Modelo salvo. A geração usa apenas modelos testados, habilitados e com custos vigentes.",
+          executionChanged
+            ? "Execução salva. O modelo ficou desabilitado; teste a geração e habilite-o novamente após a confirmação."
+            : "Modelo salvo. A geração usa apenas modelos testados, habilitados e com custos vigentes.",
         );
       } else {
         const result = await command<{ state: string }>(
@@ -304,6 +329,7 @@ export function AISettings({ refreshToken }: { refreshToken: number }) {
       }
       setEditor(null);
       await refresh();
+      onChanged?.();
     } catch (e) {
       setError((e as Error).message);
     } finally {
@@ -340,6 +366,14 @@ export function AISettings({ refreshToken }: { refreshToken: number }) {
         </button>
       </div>
       {!editor && alert}
+      {!!configuration.error && (
+        <div className="notice error" role="alert">
+          Não foi possível carregar os parâmetros de execução dos modelos.
+          <button className="button" onClick={configuration.refresh}>
+            Tentar carregar parâmetros
+          </button>
+        </div>
+      )}
       {message && (
         <div className="notice" role="status">
           {message}
@@ -458,6 +492,19 @@ export function AISettings({ refreshToken }: { refreshToken: number }) {
           busy={busy || discovering}
         >
           {alert}
+          {editor.kind === "model" && !!configuration.error && (
+            <div className="notice error" role="alert">
+              Não foi possível carregar os parâmetros de execução. Os valores
+              digitados foram mantidos.
+              <button
+                className="button"
+                type="button"
+                onClick={configuration.refresh}
+              >
+                Tentar carregar parâmetros
+              </button>
+            </div>
+          )}
           <form className="form" onSubmit={submit}>
             <fieldset disabled={busy} className="form-fieldset">
               {editor.kind === "connection" ? (
@@ -828,18 +875,17 @@ export function AISettings({ refreshToken }: { refreshToken: number }) {
                       />
                     </label>
                   </div>
-                  <label>
-                    Limite de tokens de saída
-                    <input
-                      name="max_output_tokens"
-                      type="number"
-                      min="1"
-                      max="32000"
-                      step="1"
-                      required
-                      defaultValue={m?.max_output_tokens ?? 16000}
+                  {configuration.data ? (
+                    <ModelExecutionFields
+                      configuration={configuration.data}
+                      provider={c!.provider}
+                      model={modelId}
+                      initialMaxOutputTokens={m?.max_output_tokens}
+                      initialExecution={m?.execution}
                     />
-                  </label>
+                  ) : (
+                    <p role="status">Carregando parâmetros de execução…</p>
+                  )}
                   <label className="check-row">
                     <input
                       name="enabled"
@@ -884,7 +930,12 @@ export function AISettings({ refreshToken }: { refreshToken: number }) {
                 </button>
                 <button
                   className="button primary"
-                  disabled={busy || discovering}
+                  disabled={
+                    busy ||
+                    discovering ||
+                    (editor.kind === "model" &&
+                      (!configuration.data || !!configuration.error))
+                  }
                 >
                   {busy
                     ? "Processando…"

@@ -10,10 +10,12 @@ from viracase.application.ports import ModelResult
 from viracase.domain.rules import RuleError, cost
 from viracase.infrastructure.drafts import Drafts
 from viracase.infrastructure.learning import LearningLibrary
+from viracase.infrastructure.integrations import Integrations
 from viracase.infrastructure.models import Attempt, Operation, Revision, Job
 from viracase.infrastructure.providers import HttpModelGateway, ProviderUncertain, ProviderRejected
 from viracase.infrastructure.worker import Worker
 from viracase.interfaces.api import create_app
+from workflow_http import reviewed_message
 
 
 @pytest.fixture
@@ -104,7 +106,7 @@ def test_complete_proposal_requires_explicit_apply(system, workspace, mode, call
 @pytest.mark.parametrize(
     "mode,state,calls",
     [
-        ("always_truncated", "failed", 2),
+        ("always_truncated", "failed", 4),
         ("invalid", "failed", 1),
         ("uncertain", "reconciling", 2),
         ("rejected", "failed", 2),
@@ -113,6 +115,14 @@ def test_complete_proposal_requires_explicit_apply(system, workspace, mode, call
 )
 def test_failure_keeps_canonical_and_does_not_replay(system, workspace, mode, state, calls):
     repo, actor, p, _ = workspace
+    if mode == "limit":
+        Integrations(repo).save(
+            system["admin"],
+            "jev",
+            "legacy-four-call-limit",
+            0,
+            {"settings": {"max_generation_calls": calls}, "reason": "Preservar o cenário legado de quatro chamadas"},
+        )
     gateway = Batches(mode)
     op = start(system, workspace, gateway)
     assert op["state"] == state, op
@@ -315,16 +325,9 @@ def test_authenticated_api_conversation_and_draft_validation(system, workspace):
     assert client.put(url, json=body, headers=headers).status_code == 200
     assert client.put(url, json={**body, "prompt": "x" * 12001}, headers=headers).status_code == 400
     assert client.get(url).json()["data"]["prompt"] == body["prompt"]
-    response = client.post(
-        f"/api/v1/projects/{p['id']}/conversation",
-        headers={**headers, "Idempotency-Key": "chat"},
-        json={
-            "brief": "Implemente tarefas completas",
-            "base_revision_id": p["current_revision_id"],
-            "policy_version": "2026-10-v1",
-        },
-    )
+    response = reviewed_message(client, headers, p, "chat", "Implemente tarefas completas")
     assert response.status_code == 202, response.text
+    assert Worker(repo, Batches(), system["catalog"]).tick(response.json()["id"])
     op = client.get("/api/v1/operations/" + response.json()["id"]).json()
     assert op["state"] == "succeeded", op
     assert op["model_label"] is None and "policy" not in op

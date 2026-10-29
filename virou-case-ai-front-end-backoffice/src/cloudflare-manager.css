@@ -1,0 +1,220 @@
+.cloudflare-manager {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.cloudflare-manager [hidden] {
+  display: none !important;
+}
+.cloudflare-context {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 12px;
+  align-items: center;
+  color: var(--muted);
+  font-size: 12px;
+  margin: 16px 0 20px;
+}
+.cloudflare-context .integration-badge.default {
+  margin: 0;
+}
+.cloudflare-manager-tabs {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 4px;
+  padding: 4px;
+  background: var(--pale);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  margin-bottom: 24px;
+}
+.cloudflare-manager-tabs button {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  min-height: 44px;
+  padding: 10px 8px;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 600;
+}
+.cloudflare-manager-tabs button[aria-selected="true"] {
+  color: var(--navy);
+  background: var(--surface);
+  border-color: var(--line);
+}
+.cloudflare-manager-tabs svg {
+  flex-shrink: 0;
+}
+.cloudflare-manager [role="tabpanel"] {
+  min-width: 0;
+}
+.cloudflare-section-heading {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 16px;
+  margin-bottom: 16px;
+}
+.cloudflare-section-heading .button {
+  flex-shrink: 0;
+  font-size: 12px;
+}
+.cloudflare-section-heading .field-help {
+  margin: 8px 0 0;
+}
+.cloudflare-readiness-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+.cloudflare-readiness-card {
+  min-width: 0;
+  padding: 16px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--surface);
+}
+.cloudflare-readiness-card > span {
+  display: block;
+  font-size: 12px;
+  color: var(--muted);
+  margin-bottom: 10px;
+}
+.cloudflare-readiness-card > strong {
+  display: block;
+  font-size: 17px;
+  line-height: 1.4;
+}
+.cloudflare-readiness-card > p {
+  font-size: 13px;
+  color: var(--muted);
+  margin: 8px 0 0;
+}
+.cloudflare-next-step {
+  display: grid;
+  gap: 16px;
+  padding: 20px;
+  margin: 16px 0;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--pale);
+}
+.cloudflare-next-step p {
+  margin: 8px 0 0;
+  font-size: 13px;
+  color: var(--muted);
+}
+.cloudflare-next-step > .button {
+  justify-self: start;
+}
+.cloudflare-account-summary.integration-summary {
+  margin: 16px 0;
+  background: transparent;
+  padding: 0;
+}
+.cloudflare-account-summary code {
+  font-size: 12px;
+}
+.cloudflare-scope-note {
+  display: flex;
+  gap: 8px;
+  align-items: flex-start;
+  border-top: 1px solid var(--line);
+  padding-top: 16px;
+  margin-bottom: 0;
+}
+.cloudflare-scope-note svg {
+  flex-shrink: 0;
+  margin-top: 2px;
+}
+.cloudflare-manager .publication-diagnostics {
+  border: 0;
+  padding: 0;
+  margin: 0;
+}
+.cloudflare-profiles {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  list-style: none;
+  padding: 0 !important;
+  margin: 16px 0;
+}
+.cloudflare-profiles > li {
+  min-width: 0;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 14px;
+  font-size: 13px;
+}
+.cloudflare-profiles > li > strong {
+  display: block;
+  margin-top: 8px;
+}
+.cloudflare-profiles p {
+  margin: 8px 0 0;
+}
+.cloudflare-success {
+  color: var(--success);
+}
+.cloudflare-verification-result {
+  border-top: 1px solid var(--line);
+  padding-top: 16px;
+}
+.cloudflare-verification-form {
+  border-top: 1px solid var(--line);
+  padding-top: 20px;
+  margin-top: 20px;
+}
+.cloudflare-verification-form .field-help {
+  margin: 8px 0 12px;
+  color: var(--muted);
+  font-size: 12px;
+}
+.cloudflare-verification-form label {
+  margin-top: 12px;
+  font-size: 13px;
+}
+.cloudflare-technical {
+  border-top: 1px solid var(--line);
+  margin-top: 20px;
+}
+.cloudflare-manager .cloudflare-qualification {
+  gap: 12px;
+}
+.cloudflare-qualification h3,
+.cloudflare-qualification p {
+  margin: 0;
+}
+.cloudflare-qualification textarea {
+  font:
+    12px/1.6 ui-monospace,
+    SFMono-Regular,
+    Consolas,
+    monospace;
+}
+@media (max-width: 600px) {
+  .cloudflare-manager-tabs {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    margin-bottom: 20px;
+  }
+  .cloudflare-readiness-grid,
+  .cloudflare-profiles {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .cloudflare-section-heading {
+    flex-direction: column;
+  }
+  .cloudflare-next-step {
+    padding: 16px;
+  }
+  .cloudflare-next-step > .button,
+  .cloudflare-manager .actions > .button {
+    justify-self: stretch;
+    width: 100%;
+  }
+}

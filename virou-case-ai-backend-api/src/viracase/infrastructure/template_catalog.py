@@ -1,6 +1,7 @@
 from sqlalchemy import select
 
 from viracase.domain.rules import RuleError, canonical_hash, utcnow
+from viracase.domain.template_fields import normalized_fields
 from viracase.infrastructure.configuration_lock import configuration_lock
 from viracase.infrastructure.learning import CATEGORIES
 from viracase.infrastructure.models import Audit, TemplateVersion
@@ -72,6 +73,9 @@ class TemplateCatalog:
             "visibility": "private" if row.owner_id else "official",
             "available": row.available,
             **row.content,
+            "schema_version": 1,
+            "fields": normalized_fields(row.content, row.slug),
+            "legacy_field_mapping": {field["key"]: field["semantic_id"] for field in normalized_fields(row.content, row.slug)},
         }
 
     def version(self, actor, identity):
@@ -99,7 +103,8 @@ class TemplateCatalog:
             "objective": row.content["summary"],
             "template": row.content["content"],
             "application_template": row.content["content"],
-            "fields": row.content["fields"],
+            "fields": normalized_fields(row.content, row.slug),
+            "schema_version": 1,
             "template_version": row.content.get("source_label", f"v{row.version}"),
             "template_source_version_id": row.id,
             "version": str(row.version),

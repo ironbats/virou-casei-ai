@@ -396,7 +396,11 @@ class Repository(RepositoryAdmin):
                     "CAPABILITY_UNVALIDATED",
                     "Isolamento, execução e publicação ainda aguardam validação operacional.",
                 )
-            if kind == "generation":
+            if kind in {"generation", "template_preparation"}:
+                if kind == "template_preparation":
+                    from viracase.infrastructure.template_preparations import TemplatePreparations
+
+                    TemplatePreparations(self).freeze(db, actor, pid, payload)
                 if payload.get("guided_request"):
                     from viracase.infrastructure.guided_build import GuidedBuild
 
@@ -407,7 +411,8 @@ class Repository(RepositoryAdmin):
                     )
                 if payload.get("base_revision_id") != p.current_revision_id:
                     raise RuleError("VERSION_CONFLICT", "A revisão base mudou.", 412)
-                choose_stack(payload["brief"])
+                if kind == "generation":
+                    choose_stack(payload["brief"])
                 if db.scalar(
                     select(Operation.id).where(
                         Operation.project_id == pid,
@@ -415,8 +420,8 @@ class Repository(RepositoryAdmin):
                         Operation.state.in_(["queued", "running", "reconciling"]),
                     )
                 ):
-                    raise RuleError("OPERATION_CONFLICT", "Já existe uma geração em andamento neste projeto.")
-                if (
+                    raise RuleError("OPERATION_CONFLICT", "Já existe uma operação deste tipo em andamento neste projeto.")
+                if kind == "generation" and (
                     db.scalar(select(func.count()).select_from(Revision).where(Revision.project_id == pid))
                     >= 100
                 ):
@@ -430,8 +435,26 @@ class Repository(RepositoryAdmin):
                 prepare_turn(self, db, op, p)
             db.add(op)
             db.flush()
+            if kind == "template_preparation" and payload.get("automatic_apply"):
+                from viracase.infrastructure.drafts import Drafts
+                import copy
+
+                drafts = Drafts(self, None)
+                row = drafts.row(db, actor, "build", pid)
+                data = copy.deepcopy(row.data)
+                selected = {item["attachment_id"]: item for item in payload["items"]}
+                for attachment in data["attachments"]:
+                    source = selected.get(attachment["template_id"])
+                    if source and attachment["enabled"] and attachment["attachment_instance_id"] == source["attachment_instance_id"]:
+                        attachment.update(preparation_id=op.id, fill_state="queued")
+                drafts.write(db, actor, "build", pid, row.version, data)
             record_progress(op, "queued")
-            if kind == "generation":
+            if kind == "generation" and payload.get("attachment_snapshots"):
+                from viracase.infrastructure.integration_traces import TraceStore, trace_context
+
+                fields = [{"attachment_id": item["source_template_id"], "field_id": field_id, "final_value": value, "source_type": item.get("field_values", {}).get(field_id, {}).get("source_type", "user_edit"), "state": "snapshot", "attachment_revision": item.get("attachment_revision"), "snapshot_id": item["id"]} for item in payload["attachment_snapshots"] for field_id, value in item.get("fields", {}).items()]
+                TraceStore(self).put(trace_context(self, op, "construction"), "fields", "snapshot", {"fields": {"items": fields}}, db=db)
+            if kind in {"generation", "template_preparation"}:
                 grants = db.scalars(
                     select(Grant)
                     .where(
@@ -461,7 +484,7 @@ class Repository(RepositoryAdmin):
             actor,
             f"guided-send:{pid}" if payload.get("guided_request") else f"{kind}:{pid}",
             key,
-            payload.get("guided_request", payload),
+            payload.get("preparation_request", payload.get("guided_request", payload.get("reply_request", payload))),
             command,
             "export" if kind == "export" else "generate",
         )
@@ -543,6 +566,14 @@ class Repository(RepositoryAdmin):
                     record_progress(op, op.progress_stage)
                     job = db.scalar(select(Job).where(Job.operation_id == oid))
                     job.state = "done"
+                    if op.type == "template_preparation" and op.payload.get("automatic_apply"):
+                        from viracase.infrastructure.build_workflow import apply_automatic
+
+                        apply_automatic(self, db, op)
+                    elif op.type == "template_autofill":
+                        from viracase.infrastructure.build_workflow import cancel_scheduled
+
+                        cancel_scheduled(self, db, op)
             return operation_dto(op)
 
         self.mutate(actor, f"cancel:{oid}", key, {}, command)

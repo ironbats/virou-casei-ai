@@ -75,7 +75,9 @@ def execute_publication(worker, oid, token, gateway_factory=CloudflareGateway, b
         if not state:
             return
         files = repo.source_files(state["actor"], state["pid"], state["revision"])
-        artifact = service.builder.build(files, state["stack"], state["revision"], repo.sources.secrets)
+        artifact = service.builder.build(
+            files, state["stack"], state["revision"], (*repo.sources.secrets, state["token"])
+        )
         from viracase.domain.rules import canonical_hash
 
         checkpoint(
@@ -132,7 +134,25 @@ def execute_publication(worker, oid, token, gateway_factory=CloudflareGateway, b
             }
             record_progress(op, "publication_verified")
     except Exception as exc:
-        emit("publication_failed", "error", operation_id=oid, stage=current_stage, **exception_fields(exc))
+        current = state if "state" in locals() and state else {}
+        secrets = (*repo.sources.secrets, current.get("token", ""))
+        failure = failure_record(exc, current_stage, stack=current.get("stack"), secrets=secrets)
+        if isinstance(failure.get("build"), dict):
+            failure["build"] = {
+                **failure["build"],
+                "operation_id": oid,
+                "correlation_id": oid,
+                "revision_id": current.get("revision"),
+            }
+        fields = {"build": failure["build"]} if "build" in failure else {}
+        emit(
+            "publication_failed",
+            "error",
+            operation_id=oid,
+            stage=current_stage,
+            **exception_fields(exc),
+            **fields,
+        )
         with repo.sessions.begin() as db:
             op = db.get(Operation, oid)
             repo.account(db, op.account_id, True)
@@ -144,6 +164,5 @@ def execute_publication(worker, oid, token, gateway_factory=CloudflareGateway, b
             )
             op.state, job.state = ("reconciling", "reconciling") if uncertain else ("failed", "done")
             op.error_code = exc.code if isinstance(exc, RuleError) else "PUBLICATION_FAILED"
-            secrets = (state["token"],) if "state" in locals() and state else ()
-            op.result = {**op.result, "publication_failure": failure_record(exc, current_stage, secrets=secrets)}
+            op.result = {**op.result, "publication_failure": failure}
             record_progress(op, "publication_reconciling" if uncertain else "publication_failed")

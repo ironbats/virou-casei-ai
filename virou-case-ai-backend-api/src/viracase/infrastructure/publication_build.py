@@ -3,17 +3,26 @@ import shutil
 import subprocess
 import sys
 import tempfile
-import tomllib
 import time
-from uuid import uuid4
+import tomllib
 from hashlib import sha256
 from pathlib import Path
+from uuid import uuid4
 
 from viracase.domain.rules import RuleError, canonical_hash, validate_files
-from viracase.infrastructure.publication_diagnostics import REMEDIATIONS, classify_failure, runtime_environment
+from viracase.infrastructure.publication_build_diagnostics import (
+    BuildFailure,
+    compiler_diagnostic,
+    normalized_issue,
+)
+from viracase.infrastructure.publication_diagnostics import (
+    REMEDIATIONS,
+    classify_failure,
+    runtime_environment,
+)
 from viracase.infrastructure.publication_logging import emit, safe_text
-from viracase.infrastructure.publication_sandbox import sandbox_command
 from viracase.infrastructure.publication_resources import resource_evidence, resource_snapshot
+from viracase.infrastructure.publication_sandbox import sandbox_command
 
 TOOLCHAIN = Path("/opt/viracase-build")
 if not TOOLCHAIN.is_dir():
@@ -32,6 +41,7 @@ class IsolatedBuild:
             Path(__file__).parent / name
             for name in (
                 "publication_build.py",
+                "publication_build_diagnostics.py",
                 "publication_sandbox.py",
                 "publication_diagnostics.py",
                 "publication_resources.py",
@@ -65,13 +75,13 @@ class IsolatedBuild:
     def _sandbox_command(self):
         return sandbox_command() + ["--proc", "/proc", "--dev", "/dev", "/usr/bin/true"]
 
-    def _capture(self, stage, started, result=None, exc=None, resources_before=None):
+    def _capture(self, stage, started, result=None, exc=None, resources_before=None, include_stderr=True):
         stderr = getattr(result, "stderr", b"") if result is not None else getattr(exc, "stderr", b"")
         detail = {
             "stage": stage,
             "duration_ms": max(0, round((time.monotonic() - started) * 1000)),
             "exit_code": getattr(result, "returncode", None),
-            "stderr": safe_text(stderr),
+            "stderr": safe_text(stderr) if include_stderr else "",
         }
         if exc is not None:
             detail["exception_type"] = type(exc).__name__
@@ -229,8 +239,84 @@ class IsolatedBuild:
         code, _ = self._preflight()
         return code == "READY"
 
+    def _build_failure(
+        self,
+        code,
+        message,
+        files,
+        stack,
+        revision,
+        started,
+        *,
+        result=None,
+        exc=None,
+        secrets=(),
+        fallback_code=None,
+        status=409,
+    ):
+        diagnostic = compiler_diagnostic(
+            getattr(result, "stdout", b"") if result is not None else getattr(exc, "stdout", b""),
+            getattr(result, "stderr", b"") if result is not None else getattr(exc, "stderr", b""),
+            getattr(result, "returncode", None),
+            files if isinstance(files, dict) else {},
+            duration_ms=round((time.monotonic() - started) * 1000),
+            secrets=secrets,
+            environment=getattr(self, "_environment", None),
+            resources=getattr(self, "_detail", None),
+            fallback_code=fallback_code,
+        )
+        if fallback_code in {"PROJECT_VALIDATION_FAILED", "DEPENDENCY_OUTSIDE_CATALOG"}:
+            item = {"code": fallback_code, "message": message}
+            if fallback_code == "DEPENDENCY_OUTSIDE_CATALOG" and "pyproject.toml" in files:
+                item["path"] = "pyproject.toml"
+            diagnostic["issues"] = [normalized_issue(item, files if isinstance(files, dict) else {}, secrets)]
+            diagnostic["category"] = (
+                "source" if fallback_code == "PROJECT_VALIDATION_FAILED" else "dependency"
+            )
+        fields = {}
+        if diagnostic["category"] == "executor":
+            fields.update(
+                {
+                    key: getattr(self, "_detail", {}).get(key)
+                    for key in ("resources_before", "resources_after", "resource_evidence")
+                }
+            )
+        if exc is not None:
+            fields["exception_type"] = type(exc).__name__
+            if isinstance(exc, OSError):
+                fields["errno"] = exc.errno
+        emit(
+            "build_failed",
+            "error",
+            error_code=code,
+            stage="publication_building",
+            stack=stack,
+            revision_id=revision,
+            build=diagnostic,
+            exit_code=diagnostic["exit_code"],
+            duration_ms=diagnostic["duration_ms"],
+            stdout_bytes=diagnostic["stdout_bytes"],
+            stderr_bytes=diagnostic["stderr_bytes"],
+            **fields,
+        )
+        return BuildFailure(code, message, diagnostic, status=status)
+
     def build(self, files, stack, revision, secrets=()):
-        validate_files(files, stack, secrets)
+        started = time.monotonic()
+        try:
+            validate_files(files, stack, secrets)
+        except RuleError as exc:
+            raise self._build_failure(
+                exc.code,
+                exc.message,
+                files,
+                stack,
+                revision,
+                started,
+                secrets=secrets,
+                fallback_code="PROJECT_VALIDATION_FAILED",
+                status=exc.status,
+            ) from None
         if stack == "fastapi-python-d1":
             try:
                 config = tomllib.loads(files["pyproject.toml"])
@@ -250,15 +336,27 @@ class IsolatedBuild:
                 if "build-system" in config or config.get("tool", {}).get("uv", {}).get("sources"):
                     raise ValueError()
             except (KeyError, ValueError, TypeError):
-                raise RuleError(
+                raise self._build_failure(
                     "UNSUPPORTED_DEPENDENCY",
                     "Use somente as dependências Python do catálogo aprovado; instalação dinâmica não é permitida.",
+                    files,
+                    stack,
+                    revision,
+                    started,
+                    secrets=secrets,
+                    fallback_code="DEPENDENCY_OUTSIDE_CATALOG",
                 ) from None
         if not self.available():
             emit("build_executor_unavailable", "error", **getattr(self, "_detail", {}))
-            raise RuleError(
+            raise self._build_failure(
                 "EXECUTOR_UNAVAILABLE",
                 "O executor isolado ainda não está disponível. Consulte o responsável.",
+                files,
+                stack,
+                revision,
+                started,
+                secrets=secrets,
+                fallback_code="EXECUTOR_UNAVAILABLE",
             )
         with tempfile.TemporaryDirectory(prefix="viracase-build-") as root:
             source = Path(root)
@@ -284,28 +382,70 @@ class IsolatedBuild:
                     timeout=45,
                     env={"PATH": "/usr/bin:/bin", "PYTHONPATH": str(Path(__file__).parents[2])},
                 )
-            except subprocess.TimeoutExpired:
-                emit("build_failed", "error", error_code="BUILD_TIMEOUT", stage="publication_building", duration_ms=round((time.monotonic() - started) * 1000))
-                raise RuleError("BUILD_TIMEOUT", "A preparação excedeu o limite do executor.") from None
+            except subprocess.TimeoutExpired as exc:
+                raise self._build_failure(
+                    "BUILD_TIMEOUT",
+                    "A preparação excedeu o limite do executor.",
+                    files,
+                    stack,
+                    revision,
+                    started,
+                    exc=exc,
+                    secrets=secrets,
+                    fallback_code="BUILD_TIMEOUT",
+                ) from None
             except OSError as exc:
-                emit("build_failed", "error", error_code="EXECUTOR_UNAVAILABLE", stage="publication_building", exception_type=type(exc).__name__, errno=exc.errno)
-                raise RuleError("EXECUTOR_UNAVAILABLE", "O processo de build não iniciou. Consulte o diagnóstico do executor.") from None
-            self._capture("publication_building", started, result=result, resources_before=resources_before)
+                raise self._build_failure(
+                    "EXECUTOR_UNAVAILABLE",
+                    "O processo de build não iniciou. Consulte o diagnóstico do executor.",
+                    files,
+                    stack,
+                    revision,
+                    started,
+                    exc=exc,
+                    secrets=secrets,
+                    fallback_code="EXECUTOR_UNAVAILABLE",
+                ) from None
+            self._capture(
+                "publication_building",
+                started,
+                result=result,
+                resources_before=resources_before,
+                include_stderr=False,
+            )
             if result.returncode or len(result.stdout) > 64_000_000:
-                detail = {"exit_code": result.returncode, "stdout_bytes": len(result.stdout), "stage": "publication_building", "duration_ms": round((time.monotonic() - started) * 1000)}
-                if result.stderr.startswith((b"bwrap:", b"prlimit:")):
-                    detail.update(stderr=safe_text(result.stderr, secrets), executor_code=classify_failure(result.stderr, result.returncode, getattr(self, "_environment", None), self._detail), resources_before=self._detail["resources_before"], resources_after=self._detail["resources_after"], resource_evidence=self._detail["resource_evidence"])
-                else:
-                    detail["stderr"] = "Saída do compilador omitida para não expor código ou segredos do projeto."
-                emit("build_failed", "error", error_code="BUILD_FAILED", **detail)
-                raise RuleError(
+                raise self._build_failure(
                     "BUILD_FAILED",
-                    "O projeto não passou na preparação isolada. Confira imports e dependências do catálogo.",
+                    "A preparação não foi concluída. Consulte os detalhes de compilação desta tentativa.",
+                    files,
+                    stack,
+                    revision,
+                    started,
+                    result=result,
+                    secrets=secrets,
+                    fallback_code="BUILD_OUTPUT_LIMIT" if len(result.stdout) > 64_000_000 else None,
                 )
             try:
                 built = json.loads(result.stdout)
-            except ValueError:
-                raise RuleError("BUILD_FAILED", "O executor não retornou um artefato válido.") from None
+                if (
+                    not isinstance(built, dict)
+                    or not isinstance(built.get("modules"), dict)
+                    or not isinstance(built.get("main_module"), str)
+                    or built["main_module"] not in built["modules"]
+                ):
+                    raise ValueError("invalid_artifact")
+            except (ValueError, TypeError, RecursionError):
+                raise self._build_failure(
+                    "BUILD_FAILED",
+                    "O executor não retornou um artefato válido.",
+                    files,
+                    stack,
+                    revision,
+                    started,
+                    result=result,
+                    secrets=secrets,
+                    fallback_code="BUILD_OUTPUT_INVALID",
+                ) from None
         artifact = {
             **built,
             "revision_id": revision,

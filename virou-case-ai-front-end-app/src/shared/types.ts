@@ -39,6 +39,27 @@ export type Revision = {
   created_at: string;
   files: { id: string; path: string; size: number }[];
 };
+export type PublicationBuildDiagnostic = {
+  format_version: 1;
+  category: "source" | "dependency" | "executor" | "output" | "unknown";
+  tool: "esbuild" | "python" | "sandbox" | "executor";
+  exit_code: number | null;
+  duration_ms: number;
+  stdout_bytes: number;
+  stderr_bytes: number;
+  output_truncated: boolean;
+  operation_id: string;
+  correlation_id: string;
+  revision_id: string;
+  issues: {
+    code: string;
+    message: string;
+    hint: string;
+    path?: string;
+    line?: number;
+    column?: number;
+  }[];
+};
 export type Operation = {
   id: string;
   type: string;
@@ -51,6 +72,7 @@ export type Operation = {
   error_code: string | null;
   model_label?: string | null;
   request_text?: string | null;
+  reply_to?: string | null;
   progress_message?: string;
   activity?: { stage: string; at: string; message: string }[];
   created_at: string;
@@ -63,6 +85,13 @@ export type Operation = {
     content_hash: string;
   }[];
   result_ref: {
+    publication_failure?: {
+      code?: string;
+      message?: string;
+      stage?: string;
+      at?: string;
+      build?: PublicationBuildDiagnostic;
+    };
     discarded_at?: string;
     url?: string;
     verified_at?: string;
@@ -75,7 +104,10 @@ export type Operation = {
     export_id?: string;
     candidate?: boolean;
     download_path?: string;
-    changed_files?: { path: string; change: "created" | "modified" }[];
+    changed_files?: {
+      path: string;
+      change: "created" | "modified" | "deleted";
+    }[];
     validation?: string;
   };
 };
@@ -105,6 +137,7 @@ export type Capabilities = {
   };
   policy_version: string;
   generation: Capability;
+  template_preparation?: Capability;
   publication: Capability;
   preview: Capability;
 };

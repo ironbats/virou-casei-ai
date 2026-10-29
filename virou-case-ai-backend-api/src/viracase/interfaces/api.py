@@ -1,10 +1,9 @@
 import hmac
-import json
-import logging
 import time
 from contextlib import asynccontextmanager
 from decimal import Decimal
-from uuid import uuid4
+from datetime import datetime
+from uuid import UUID, uuid4
 
 from fastapi import BackgroundTasks, Depends, FastAPI, Header, Query, Request
 from fastapi.exceptions import RequestValidationError
@@ -20,6 +19,8 @@ from viracase.infrastructure.integrations import Integrations
 from viracase.infrastructure.learning import LearningLibrary
 from viracase.infrastructure.models import Attempt, Audit, Job, Operation, PurgeInventory
 from viracase.infrastructure.publication import PublicationService
+from viracase.infrastructure.workflow_logging import emit, workflow_context
+from viracase.interfaces.preparation_schemas import ProposalApplyInput
 from viracase.interfaces.schemas import (
     AccessAdjustmentInput,
     AccessInput,
@@ -56,7 +57,6 @@ OFFER = {
     "rollover": False,
     "whatsapp_url": "https://wa.me/5511941810735",
 }
-log = logging.getLogger("viracase.api")
 
 
 def create_app(admin=False, dependencies=None):
@@ -94,7 +94,33 @@ def create_app(admin=False, dependencies=None):
         else [host.strip() for host in config.public_hosts.split(",") if host.strip()],
     )
 
-    def error_response(request, code, message, status):
+    def request_fields(request):
+        route = request.scope.get("route")
+        fields = {
+            "request_id": getattr(request.state, "request_id", ""),
+            "phase": "api",
+            "audience": audience,
+            "method": request.method,
+            "route": getattr(route, "path", None),
+        }
+        for parameter, name in (("pid", "project_id"), ("oid", "operation_id")):
+            try:
+                value = request.path_params.get(parameter)
+                fields[name] = str(UUID(value)) if value else None
+            except (ValueError, TypeError, AttributeError):
+                pass
+        return fields
+
+    def error_response(request, code, message, status, details=None, cause=None):
+        request.state.error_code = code
+        emit(
+            "http_request_failed" if status >= 500 else "http_request_rejected",
+            "error" if status >= 500 else "warning",
+            error=cause,
+            **request_fields(request),
+            error_code=code,
+            http_status=status,
+        )
         return JSONResponse(
             {
                 "error": {
@@ -102,11 +128,30 @@ def create_app(admin=False, dependencies=None):
                     "message": message,
                     "request_id": getattr(request.state, "request_id", ""),
                     "retryable": False,
-                    "details": {},
+                    "details": details or {},
                 }
             },
             status_code=status,
         )
+
+    def complete_response(request, response, started):
+        response.headers.update(
+            {
+                "X-Request-ID": request.state.request_id,
+                "Cache-Control": "no-store",
+                "X-Content-Type-Options": "nosniff",
+                "Referrer-Policy": "no-referrer",
+                "Content-Security-Policy": "default-src 'none'; frame-ancestors 'none'",
+            }
+        )
+        emit(
+            "http_request_completed",
+            **request_fields(request),
+            http_status=response.status_code,
+            duration_ms=round((time.monotonic() - started) * 1000),
+            error_code=getattr(request.state, "error_code", None),
+        )
+        return response
 
     @app.middleware("http")
     async def boundary(request, call_next):
@@ -118,69 +163,50 @@ def create_app(admin=False, dependencies=None):
             except ValueError:
                 origin_allowed = False
             if not origin_allowed:
-                return error_response(request, "ORIGIN_DENIED", "Origem não autorizada.", 403)
+                return complete_response(
+                    request, error_response(request, "ORIGIN_DENIED", "Origem não autorizada.", 403), start
+                )
             try:
                 size = int(request.headers.get("content-length", "0"))
             except ValueError:
                 size = 9_000_000
             if size > 3_000_000:
-                return error_response(request, "PAYLOAD_TOO_LARGE", "Conteúdo acima do limite.", 413)
+                return complete_response(
+                    request, error_response(request, "PAYLOAD_TOO_LARGE", "Conteúdo acima do limite.", 413), start
+                )
             body = bytearray()
             async for chunk in request.stream():
                 body.extend(chunk)
                 if len(body) > 3_000_000:
-                    return error_response(request, "PAYLOAD_TOO_LARGE", "Conteúdo acima do limite.", 413)
+                    return complete_response(
+                        request, error_response(request, "PAYLOAD_TOO_LARGE", "Conteúdo acima do limite.", 413), start
+                    )
             request._body = bytes(body)
         try:
             from viracase.infrastructure.publication_logging import publication_context
 
-            with publication_context(request_id=request.state.request_id):
+            with publication_context(request_id=request.state.request_id), workflow_context(
+                request_id=request.state.request_id, phase="api", audience=audience
+            ):
                 response = await call_next(request)
         except Exception as exc:
-            log.error(
-                json.dumps(
-                    {
-                        "request_id": request.state.request_id,
-                        "event": "request_failure",
-                        "exception_type": type(exc).__name__,
-                    }
-                )
-            )
             response = error_response(
                 request,
                 "DEPENDENCY_UNAVAILABLE",
                 "Não foi possível concluir. Consulte o estado antes de repetir.",
                 503,
+                cause=exc,
             )
-        response.headers.update(
-            {
-                "X-Request-ID": request.state.request_id,
-                "Cache-Control": "no-store",
-                "X-Content-Type-Options": "nosniff",
-                "Referrer-Policy": "no-referrer",
-                "Content-Security-Policy": "default-src 'none'; frame-ancestors 'none'",
-            }
-        )
-        log.info(
-            json.dumps(
-                {
-                    "request_id": request.state.request_id,
-                    "method": request.method,
-                    "status": response.status_code,
-                    "duration_ms": round((time.monotonic() - start) * 1000),
-                }
-            )
-        )
-        return response
+        return complete_response(request, response, start)
 
     @app.exception_handler(RuleError)
     async def rule_error(request, exc):
-        return error_response(request, exc.code, exc.message, exc.status)
+        return error_response(request, exc.code, exc.message, exc.status, exc.details, cause=exc)
 
     @app.exception_handler(RequestValidationError)
     async def validation_error(request, exc):
         return error_response(
-            request, "VALIDATION_ERROR", "Confira os campos obrigatórios e seus limites.", 400
+            request, "VALIDATION_ERROR", "Confira os campos obrigatórios e seus limites.", 400, cause=exc
         )
 
     def actor(request: Request):
@@ -208,7 +234,7 @@ def create_app(admin=False, dependencies=None):
     def ready():
         with engine.connect() as connection:
             version = connection.execute(text("SELECT version_num FROM alembic_version")).scalar()
-            if version != "0006":
+            if version != "0007":
                 raise RuleError("SCHEMA_PENDING", "Migrações pendentes.", 503)
         return {"status": "ready"}
 
@@ -242,8 +268,10 @@ def create_app(admin=False, dependencies=None):
 
     if not admin:
         from viracase.interfaces.guided_routes import mount_guided_routes
+        from viracase.interfaces.preparation_routes import mount_preparation_routes
 
         mount_guided_routes(app, prefix, repo, learning, generation, actor, key, version)
+        mount_preparation_routes(app, prefix, repo, learning, catalog, actor, key)
 
         @app.get(prefix + "/offer")
         def offer():
@@ -251,6 +279,8 @@ def create_app(admin=False, dependencies=None):
 
         @app.get(prefix + "/capabilities")
         def capabilities(who=Depends(actor)):
+            from viracase.infrastructure.template_preparations import TemplatePreparations
+
             enabled = bool(catalog.eligible()) and not config.restore_hold
             blocked = {"enabled": False, "reason_code": "CAPABILITY_UNVALIDATED"}
             return {
@@ -272,12 +302,13 @@ def create_app(admin=False, dependencies=None):
                 "guided_build": {
                     k: v
                     for k, v in Integrations(repo).build_policy().items()
-                    if k.startswith("max_") or k == "autosave_ms"
+                    if k.startswith("max_") or k in {"autosave_ms", "selection_debounce_ms"}
                 },
                 "generation": {
                     "enabled": enabled,
                     "reason_code": None if enabled else "COMMERCIAL_CONFIGURATION_PENDING",
                 },
+                "template_preparation": TemplatePreparations(repo, learning, catalog).capability(),
             }
 
         def authorize_learning(who):
@@ -332,9 +363,9 @@ def create_app(admin=False, dependencies=None):
 
         @app.post(prefix + "/projects/{pid}/proposals/{oid}/apply")
         def apply_proposal(
-            pid: str, oid: str, who=Depends(actor), intention=Depends(key), current=Depends(version)
+            pid: str, oid: str, data: ProposalApplyInput | None = None, who=Depends(actor), intention=Depends(key), current=Depends(version)
         ):
-            return drafts.apply(who["id"], pid, oid, intention, current)
+            return drafts.apply(who["id"], pid, oid, intention, current, data.model_dump(exclude_none=True) if data else None)
 
         @app.get(prefix + "/projects")
         def projects(who=Depends(actor)):
@@ -392,7 +423,8 @@ def create_app(admin=False, dependencies=None):
 
         @app.post(prefix + "/projects/{pid}/generations", status_code=202)
         def generate(pid: str, data: GenerateInput, who=Depends(actor), intention=Depends(key)):
-            return generation.start(who["id"], pid, intention, data.model_dump())
+            repo.project(who["id"], pid)
+            raise RuleError("WORKFLOW_REQUIRED", "Prepare a construção em Ideia, escolha Templates e revise antes de enviar.", 409)
 
         @app.post(prefix + "/projects/{pid}/conversation", status_code=202)
         def conversation(
@@ -402,19 +434,8 @@ def create_app(admin=False, dependencies=None):
             who=Depends(actor),
             intention=Depends(key),
         ):
-            from viracase.infrastructure.worker import Worker
-
-            result = generation.start(
-                who["id"],
-                pid,
-                intention,
-                {**data.model_dump(), "review_required": not data.auto_apply},
-                contract_version=4 if data.auto_apply else 3,
-            )
-            # Start immediately after acknowledgement; the durable worker remains the recovery path.
-            if result["state"] == "queued":
-                background.add_task(Worker(repo, gateway, catalog).tick, result["id"])
-            return result
+            repo.project(who["id"], pid)
+            raise RuleError("WORKFLOW_REQUIRED", "Todo novo pedido começa em Ideia e passa por Templates e Revisão.", 409)
 
         @app.post(prefix + "/projects/{pid}/exports", status_code=202)
         def export(pid: str, data: RevisionReference, who=Depends(actor), intention=Depends(key)):
@@ -475,8 +496,10 @@ def create_app(admin=False, dependencies=None):
 
         mount_ai_routes(app, prefix, repo, catalog, actor, key)
         from viracase.interfaces.integration_routes import mount_integration_routes
+        from viracase.interfaces.preparation_routes import mount_trace_routes
 
         mount_integration_routes(app, prefix, repo, actor, key, version)
+        mount_trace_routes(app, prefix, repo, catalog, actor, key, version)
 
         @app.get(prefix + "/accounts")
         def accounts(cursor: str | None = None, who=Depends(actor)):
@@ -534,11 +557,15 @@ def create_app(admin=False, dependencies=None):
             project: str | None = Query(None, max_length=36),
             before: int | None = Query(None, ge=1),
             limit: int = Query(100, ge=1, le=200),
+            phase: str | None = Query(None, pattern="^(recommendation|preparation|review|construction)$"),
+            state: str | None = Query(None, max_length=24),
+            since: datetime | None = None,
+            until: datetime | None = None,
             who=Depends(actor),
         ):
             from viracase.infrastructure.observability import events
 
-            return events(repo, who["id"], service, level, correlation, project, before, limit)
+            return events(repo, who["id"], service, level, correlation, project, before, limit, phase, state, since, until)
 
         @app.get(prefix + "/observability/runtime")
         def runtime_status(who=Depends(actor)):
@@ -587,6 +614,10 @@ def create_app(admin=False, dependencies=None):
                 if attempt:
                     attempt.state, attempt.actual_brl, attempt.usage = "reconciled", actual, data.usage or {}
                 db.scalar(select(Job).where(Job.operation_id == oid)).state = "done"
+                if op.type == "template_preparation" and op.payload.get("automatic_apply"):
+                    from viracase.infrastructure.build_workflow import apply_automatic
+
+                    apply_automatic(repo, db, op)
                 db.add(
                     Audit(
                         actor_id=who["id"],

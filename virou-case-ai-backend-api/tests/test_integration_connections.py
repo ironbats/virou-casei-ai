@@ -125,7 +125,8 @@ def test_multiple_connections_isolate_credentials_versions_activation_and_defaul
         payload(provider, "Conta A", "a", token=False),
         first["connection_id"],
     )
-    assert changed["version"] > second["version"] and changed["state"] == "draft"
+    expected_state = "active" if provider == "jev" else "draft"
+    assert changed["version"] > second["version"] and changed["state"] == expected_state
     assert registry.get(provider, second["connection_id"])["state"] == "active"
     with system["repo"].sessions() as db:
         a, b = db.get(IntegrationConfig, changed["id"]), db.get(IntegrationConfig, second["id"])

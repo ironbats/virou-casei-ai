@@ -286,7 +286,7 @@ class PurgeInventory(Base):
     account_id: Mapped[str] = mapped_column(ForeignKey("accounts.id"))
     fence: Mapped[str] = mapped_column(String(36))
     destination: Mapped[str] = mapped_column(String(60))
-    state: Mapped[str] = mapped_column(String(24), default="pending")
+    state: Mapped[str] = mapped_column(String(32), default="pending")
     evidence: Mapped[dict] = mapped_column(JSON, default=dict)
     __table_args__ = (UniqueConstraint("account_id", "fence", "destination"),)
 
@@ -391,3 +391,48 @@ class RuntimeEvent(Base):
         Index("ix_runtime_events_service", "service", "id"),
         Index("ix_runtime_events_correlation", "correlation_id", "id"),
     )
+
+
+class FeaturePolicy(Base):
+    __tablename__ = "feature_policies"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    name: Mapped[str] = mapped_column(String(60))
+    version: Mapped[int] = mapped_column(Integer)
+    settings: Mapped[dict] = mapped_column(JSON)
+    created_by: Mapped[str] = mapped_column(ForeignKey("accounts.id"))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    __table_args__ = (UniqueConstraint("name", "version"),)
+
+
+class IntegrationTrace(Base):
+    __tablename__ = "integration_traces"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    trace_id: Mapped[str] = mapped_column(String(36), index=True)
+    parent_span_id: Mapped[str | None] = mapped_column(String(36))
+    sequence: Mapped[int] = mapped_column(Integer)
+    operation_id: Mapped[str | None] = mapped_column(String(36), index=True)
+    account_id: Mapped[str | None] = mapped_column(String(36))
+    project_id: Mapped[str | None] = mapped_column(String(36), index=True)
+    service: Mapped[str] = mapped_column(String(24))
+    stage: Mapped[str] = mapped_column(String(24))
+    direction: Mapped[str] = mapped_column(String(24))
+    status: Mapped[str] = mapped_column(String(24), default="pending")
+    capture_state: Mapped[str] = mapped_column(String(24), default="disabled")
+    details: Mapped[dict] = mapped_column(JSON, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    __table_args__ = (
+        Index("ix_integration_traces_created", "created_at", "id"),
+        Index("ix_integration_traces_phase", "stage", "created_at", "id"),
+        Index("ix_integration_traces_expires", "expires_at"),
+    )
+
+
+class IntegrationTracePayload(Base):
+    __tablename__ = "integration_trace_payloads"
+    trace_id: Mapped[str] = mapped_column(ForeignKey("integration_traces.id", ondelete="CASCADE"), primary_key=True)
+    section: Mapped[str] = mapped_column(String(16), primary_key=True)
+    content: Mapped[dict] = mapped_column(JSON)
+    size_bytes: Mapped[int] = mapped_column(Integer)
+    policy_version: Mapped[int] = mapped_column(Integer)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)

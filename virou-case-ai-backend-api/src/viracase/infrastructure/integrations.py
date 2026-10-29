@@ -17,6 +17,14 @@ from viracase.infrastructure.models import (
 )
 from viracase.interfaces.feature_schemas import BuildPolicy, CloudflarePolicy
 
+JEV_LOCAL_FIELDS = {
+    "max_objective_chars", "max_message_chars", "max_attachments", "max_attachment_chars",
+    "max_context_bytes", "max_generation_context_bytes", "max_generation_calls",
+    "generation_model_id", "max_truncation_retries", "max_response_repairs",
+    "max_batch_characters", "minimum_batch_characters", "batch_shrink_factor",
+    "autosave_ms", "selection_debounce_ms",
+}
+
 
 class Integrations:
     def __init__(self, repo):
@@ -131,9 +139,15 @@ class Integrations:
             return result
 
     def build_policy(self):
+        return self.build_configuration()["settings"]
+
+    def build_configuration(self):
         with self.repo.sessions() as db:
             row = self.latest(db, "jev")
-            return BuildPolicy(**row.settings).model_dump() if row else BuildPolicy().model_dump()
+            return {
+                "version": row.version if row else 0,
+                "settings": BuildPolicy(**row.settings).model_dump() if row else BuildPolicy().model_dump(),
+            }
 
     def save(self, actor, provider, key, version, payload, connection_id=None, create=False):
         policy = (BuildPolicy if provider == "jev" else CloudflarePolicy).model_validate(payload["settings"])
@@ -170,6 +184,22 @@ class Integrations:
             current = self.latest(db, provider, connection_id=connection.id)
             if (current.version if current else 0) != version:
                 raise RuleError("VERSION_CONFLICT", "A configuração mudou. Atualize antes de salvar.", 412)
+            preserved = None
+            if provider == "jev":
+                if settings["generation_model_id"]:
+                    from viracase.infrastructure.ai_registry import AIRegistry
+                    from viracase.infrastructure.providers import ModelCatalog
+
+                    available = ModelCatalog(self.repo.config, AIRegistry(self.repo)).eligible()
+                    if settings["generation_model_id"] not in {
+                        p.get("model_id", p["provider"] + ":" + p["model"]) for p in available
+                    }:
+                        raise RuleError("MODEL_UNAVAILABLE", "Selecione um modelo habilitado e validado.", 400)
+                if current and not token:
+                    previous_settings = BuildPolicy.model_validate(current.settings).model_dump(mode="json")
+                    changed = {field for field in settings if settings[field] != previous_settings[field]}
+                    if changed <= JEV_LOCAL_FIELDS:
+                        preserved = (current.state, dict(current.validation), current.validated_at)
             if payload.get("name"):
                 connection.name = payload["name"].strip()
                 connection.name_key = connection.name.casefold()
@@ -226,10 +256,11 @@ class Integrations:
                 id=identity,
                 provider=provider,
                 version=next_version,
-                state="draft",
+                state=preserved[0] if preserved else "draft",
                 settings=settings,
                 credential=self.vault.encrypt(identity, credential) if credential else None,
-                validation={},
+                validation=preserved[1] if preserved else {},
+                validated_at=preserved[2] if preserved else None,
                 created_by=actor,
                 created_at=utcnow(),
             )

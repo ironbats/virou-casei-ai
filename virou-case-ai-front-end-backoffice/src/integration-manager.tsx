@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { CloudflareManager } from "./cloudflare-manager";
 import { command, date } from "./api";
 import { ErrorNotice } from "./admin-ui";
 import { IntegrationDialog, useRemote } from "./integration-ui";
@@ -10,7 +11,26 @@ import {
   type Provider,
 } from "./integration-types";
 
-export function IntegrationManager({
+type ManagerProps = {
+  provider: Provider;
+  connection: Connection;
+  close: () => void;
+  changed: () => void;
+};
+
+export function IntegrationManager(props: ManagerProps) {
+  return props.provider === "cloudflare" ? (
+    <CloudflareManager
+      connection={props.connection}
+      close={props.close}
+      changed={props.changed}
+    />
+  ) : (
+    <ConnectionManager {...props} />
+  );
+}
+
+function ConnectionManager({
   provider,
   connection,
   close,
@@ -203,7 +223,14 @@ export function IntegrationManager({
               </pre>
             </details>
           )}
-          {provider === "cloudflare" && <PublicationDiagnostics config={config} blocked={busy || reportDirty} onBusy={setReportBusy} changed={changed} />}
+          {provider === "cloudflare" && (
+            <PublicationDiagnostics
+              config={config}
+              blocked={busy || reportDirty}
+              onBusy={setReportBusy}
+              changed={changed}
+            />
+          )}
           {provider === "cloudflare" && (
             <Qualification
               config={config}

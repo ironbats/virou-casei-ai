@@ -70,7 +70,7 @@ def normalize_image_permissions(image):
     commands = [
         line.removeprefix("RUN ")
         for line in (image / "Dockerfile").read_text().splitlines()
-        if line.startswith("RUN chmod -R u=rwX,go=rX ")
+        if line.startswith("RUN chmod -R u=rwX,go=rX /app/src ")
     ]
     assert len(commands) == 1
     command = commands[0].replace("/app", shlex.quote(str(image)))
@@ -189,7 +189,7 @@ def test_existing_revision_and_admin_survive_permission_fix_and_upgrade(image_tr
             assert accounts[0].id == "existing-admin"
             assert accounts[0].password_hash == "synthetic-existing-hash-preserved"
             assert accounts[0].login == "keep-existing-admin"
-            assert session.scalar(text("SELECT version_num FROM alembic_version")) == "0006"
+            assert session.scalar(text("SELECT version_num FROM alembic_version")) == "0007"
     finally:
         engine.dispose()
 

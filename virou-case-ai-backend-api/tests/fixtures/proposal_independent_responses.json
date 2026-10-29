@@ -1,0 +1,125 @@
+{
+  "method": "Respostas produzidas por um agente independente que leu somente os prompts, sem acesso ao parser, implementação ou expectativas dos testes; sem chamada externa a Gemini/OpenAI.",
+  "cases": [
+    {
+      "id": "padaria",
+      "request": "Precisamos agora melhorar a home page, e criar um carrousel de produtos da minha padaria e tambem o preço de cada produto, vamos aprimorar tambem a UX e Ter opcao de colocar os produtos no carrinho mas para efetivar a compra de fato o cliente precisa fazer um cadastro e estar logado.",
+      "response": {
+        "items": {
+          "autorizacao": {
+            "field_1": {
+              "proposal": "Proponho distinguir o visitante, que pode explorar os produtos e montar o carrinho, do cliente cadastrado com sessão autenticada e validada no servidor, que pode efetivar a própria compra. O cadastro e o login devem ser exigidos na finalização, sem bloquear a navegação pela home."
+            },
+            "field_2": {
+              "proposal": "Proponho permitir visualizar o carrossel com os preços e adicionar produtos ao carrinho antes do login. Para efetivar a compra, permitir somente ao cliente cadastrado e autenticado confirmar o próprio carrinho, com retorno ao fluxo após entrar ou concluir o cadastro."
+            },
+            "field_3": {
+              "proposal": "Proponho tratar o carrinho e o pedido como recursos vinculados ao cliente na finalização. O servidor deve localizar o carrinho solicitado, seus produtos e quantidades por referências válidas do projeto e identificar o pedido gerado sem depender de nomes de tabelas ou rotas ainda não informados. A consulta aos produtos e preços do carrossel permanece pública."
+            },
+            "field_4": {
+              "proposal": "Proponho obter o dono exclusivamente da identidade autenticada em uma sessão validada no servidor. Ao finalizar, vincular o carrinho e o novo pedido a essa identidade e conferir a propriedade de qualquer recurso já persistido. A seleção feita antes do login pode ser reaproveitada após validação dos produtos; uma identidade enviada pelo navegador nunca deve comprovar propriedade."
+            },
+            "field_5": {
+              "proposal": "Proponho autorizar a finalização somente quando o servidor confirmar cadastro, sessão válida e propriedade do carrinho pelo cliente autenticado. Os produtos, preços e quantidades devem ser revalidados no servidor antes da confirmação. A ausência de login não deve impedir visualizar produtos, consultar preços ou adicioná-los ao carrinho."
+            },
+            "field_6": {
+              "proposal": "Proponho negar a finalização por padrão quando a identidade ou a propriedade não puder ser confirmada, sem criar pedido nem iniciar cobrança. Sem sessão válida, responder que é necessário entrar ou cadastrar-se, preservando a seleção de produtos. Para um carrinho ou pedido de outro cliente, responder como recurso indisponível, sem revelar seu dono ou conteúdo."
+            },
+            "field_7": {
+              "proposal": "Proponho planejar um teste com duas contas: uma tenta finalizar o carrinho ou acessar o pedido da outra, inclusive alterando as referências enviadas. O critério é negar essas tentativas sem revelar dados ou gerar compra, permitindo a finalização do próprio carrinho com sessão válida. Coletar respostas e registros sem dados pessoais que demonstrem ausência de efeitos indevidos; incluir o caso de visitante que adiciona produtos, mas precisa entrar para comprar."
+            },
+            "field_8": {
+              "proposal": "Proponho que uma tentativa de finalizar com sessão expirada receba resposta de autenticação necessária, sem confirmação de compra ou cobrança. A interface deve preservar a seleção de produtos, oferecer novo login e, após autenticar, revalidar a propriedade do carrinho e os preços antes de solicitar nova confirmação."
+            },
+            "field_9": {
+              "proposal": "Proponho responder recurso indisponível quando o carrinho ou pedido solicitado não existir, usando a mesma mensagem de acesso indevido para evitar revelar recursos de outras contas. Se um produto do carrinho não existir mais, impedir a finalização e indicar que a seleção precisa ser atualizada, sem criar uma compra parcial silenciosamente."
+            },
+            "field_10": {
+              "proposal": "Proponho registrar cada decisão de autorização da finalização com instante, ação, resultado, motivo categórico e referências internas pseudonimizadas do ator e do recurso, quando disponíveis. Não registrar senhas, tokens, dados de pagamento, endereços ou o conteúdo completo do carrinho. A evidência a coletar deve permitir relacionar uma tentativa à decisão do servidor sem expor dados sensíveis."
+            }
+          }
+        }
+      }
+    },
+    {
+      "id": "agenda",
+      "request": "Pacientes podem agendar consultas somente para si. A identidade deve vir do usuário de uma sessão validada no servidor. Antes de confirmar uma consulta, o paciente precisa estar autenticado. Quando a tela for pequena, mostrar os horários em uma coluna.",
+      "response": {
+        "items": {
+          "autorizacao": {
+            "field_1": {
+              "proposal": "Proponho representar o ator como o paciente identificado pelo usuário de uma sessão validada no servidor. A identidade usada para confirmar a consulta deve ser a desse paciente autenticado, sem permitir que ele assuma o papel de outro paciente por dados enviados na interface."
+            },
+            "field_2": {
+              "proposal": "Proponho permitir ao paciente selecionar um horário e confirmar uma consulta somente para si, exigindo autenticação antes da confirmação. Na interface, organizar os horários em uma coluna quando a tela for pequena e apresentar claramente a ação de confirmar o agendamento."
+            },
+            "field_3": {
+              "proposal": "Proponho tratar a consulta a confirmar como recurso associado ao paciente e ao horário escolhido. O servidor deve localizar o horário por uma referência válida do projeto e, quando houver uma consulta já iniciada, localizar seu registro e o paciente vinculado antes de permitir a confirmação."
+            },
+            "field_4": {
+              "proposal": "Proponho derivar a identidade do paciente exclusivamente do usuário de uma sessão autenticada e validada no servidor. Vincular uma nova consulta a essa identidade e conferir a propriedade de uma consulta já registrada. Não aceitar identificação de outro paciente enviada pelo cliente para trocar o dono ou comprovar autorização."
+            },
+            "field_5": {
+              "proposal": "Proponho autorizar a confirmação apenas quando a sessão estiver válida e a consulta pertencer ao próprio paciente autenticado, vinculando a ele qualquer novo agendamento. Também revalidar a existência e a disponibilidade do horário no momento da confirmação, sem permitir que uma seleção antiga gere conflito de agenda."
+            },
+            "field_6": {
+              "proposal": "Proponho negar a confirmação por padrão quando não for possível comprovar a sessão ou a relação entre o paciente e a consulta, sem reservar horário nem criar agendamento. Para ausência de autenticação, solicitar login; para tentativa de usar consulta de outro paciente, responder recurso indisponível sem expor dados dessa pessoa."
+            },
+            "field_7": {
+              "proposal": "Proponho planejar testes com duas contas de pacientes, incluindo tentativas de confirmar a consulta da outra pessoa e de enviar outra identidade como dona de um novo agendamento. O critério é negar a troca de paciente, não gerar reserva indevida e permitir apenas a confirmação para a própria identidade autenticada. Coletar respostas e evidências de persistência sem nomes ou dados clínicos, para demonstrar o isolamento."
+            },
+            "field_8": {
+              "proposal": "Proponho negar a confirmação quando a sessão tiver expirado, informar que o paciente precisa entrar novamente e não criar consulta nem reservar o horário. A interface pode preservar o horário selecionado para conveniência; depois do login, deve revalidar identidade, propriedade e disponibilidade antes de pedir nova confirmação."
+            },
+            "field_9": {
+              "proposal": "Proponho responder que o recurso está indisponível quando a consulta ou o horário solicitado não existir, sem criar agendamento substituto. Para uma consulta inexistente, usar a mesma resposta pública de uma consulta pertencente a outro paciente. A interface deve atualizar os horários e permitir uma nova seleção quando necessário."
+            },
+            "field_10": {
+              "proposal": "Proponho auditar a decisão de confirmar o agendamento com instante, ação, resultado, motivo categórico e referências internas pseudonimizadas do paciente e da consulta, quando disponíveis. Excluir nomes, contatos, informações clínicas, credenciais e conteúdo da sessão. Coletar evidência de que cada confirmação ou negação pode ser relacionada à decisão de autorização sem revelar dados de saúde."
+            }
+          }
+        }
+      }
+    },
+    {
+      "id": "documentos",
+      "request": "Colaboradores podem baixar documentos somente da própria equipe. O servidor usa o ID de equipe da sessão autenticada para identificar o dono. A permissão depende de o documento pertencer à mesma equipe do colaborador. Sem alterar o catálogo público, melhorar o botão de download.",
+      "response": {
+        "items": {
+          "autorizacao": {
+            "field_1": {
+              "proposal": "Proponho identificar o ator como colaborador autenticado e associá-lo à equipe indicada em sua sessão validada no servidor. O papel de colaborador deve permitir solicitar downloads exclusivamente dos documentos da própria equipe."
+            },
+            "field_2": {
+              "proposal": "Proponho permitir baixar um documento somente quando ele pertencer à equipe do colaborador autenticado. Melhorar o botão de download com rótulo claro, foco visível, estado de carregamento e mensagem de falha com nova tentativa, preservando o catálogo público."
+            },
+            "field_3": {
+              "proposal": "Proponho tratar o documento solicitado como recurso protegido, localizado no servidor por uma referência válida do projeto. Antes de entregar o arquivo, carregar sua associação persistida à equipe; a referência enviada pelo cliente apenas identifica o documento e não comprova permissão."
+            },
+            "field_4": {
+              "proposal": "Proponho usar o ID de equipe obtido da sessão autenticada e validada no servidor como origem confiável da equipe do colaborador. Conferir esse ID com a equipe proprietária registrada para o documento. Ignorar qualquer equipe declarada pelo navegador como prova de propriedade ou autorização."
+            },
+            "field_5": {
+              "proposal": "Proponho autorizar cada download somente se a sessão do colaborador estiver válida e a equipe proprietária do documento for a mesma da sessão. Executar essa conferência no servidor antes de enviar o arquivo, inclusive em solicitações diretas que não passem pelo botão. A regra do download não deve alterar o catálogo público."
+            },
+            "field_6": {
+              "proposal": "Proponho negar o download por padrão quando a sessão, a equipe ou a propriedade não puder ser confirmada, sem enviar bytes do arquivo. Sem autenticação válida, informar que é necessário entrar; para documento de outra equipe, responder recurso indisponível sem revelar sua equipe, nome ou conteúdo."
+            },
+            "field_7": {
+              "proposal": "Proponho planejar testes com colaboradores de duas equipes: cada um consegue baixar um documento da própria equipe, mas recebe negação ao solicitar o documento da outra, mesmo alterando a referência do arquivo ou enviando uma equipe diferente pelo cliente. Coletar respostas e evidências de ausência de conteúdo nos casos negados, sem registrar o arquivo ou dados pessoais. Verificar como critério adicional a preservação do catálogo público."
+            },
+            "field_8": {
+              "proposal": "Proponho que um pedido de download recebido com sessão expirada seja negado antes do envio do arquivo, com indicação de autenticação necessária. O botão deve apresentar a falha de forma acessível e permitir tentar novamente após o login, quando o servidor deverá conferir novamente a equipe e a propriedade do documento."
+            },
+            "field_9": {
+              "proposal": "Proponho responder recurso indisponível quando o documento não existir, sem entregar arquivo ou link de acesso. Usar a mesma resposta pública para documentos pertencentes a outra equipe, evitando revelar sua existência. O botão deve encerrar o carregamento e explicar que o download não está disponível."
+            },
+            "field_10": {
+              "proposal": "Proponho registrar a decisão de autorização do download com instante, ação, resultado, motivo categórico e referências internas pseudonimizadas do colaborador, da equipe e do documento, quando disponíveis. Não incluir conteúdo ou nome do arquivo, credenciais, tokens de sessão ou links de acesso. A evidência a coletar deve permitir analisar tentativas entre equipes sem expor o documento."
+            }
+          }
+        }
+      }
+    }
+  ]
+}

@@ -96,8 +96,8 @@ export async function workspace(page: Page, guided = false) {
             "If-Match": String(draft.version),
           },
           body: JSON.stringify({
-            stage: "review",
-            objective: project.objective,
+            stage: "idea",
+            objective: "",
             message_text: "",
             attachments: [],
             recommendation_id: null,
@@ -112,4 +112,71 @@ export async function workspace(page: Page, guided = false) {
   ).toBeVisible();
   await page.getByRole("button", { name: "Usar texto simples" }).click();
   return project;
+}
+
+export async function reviewRequest(page: Page, request: string) {
+  await expect
+    .poll(
+      async () =>
+        (await page
+          .getByLabel("O que vamos fazer?", { exact: true })
+          .isVisible()) ||
+        (await page
+          .getByRole("button", { name: "Nova construção", exact: true })
+          .isVisible()),
+    )
+    .toBe(true);
+  if (
+    !(await page.getByLabel("O que vamos fazer?", { exact: true }).isVisible())
+  )
+    await page
+      .getByRole("button", { name: "Nova construção", exact: true })
+      .click();
+  await page.getByLabel("O que vamos fazer?", { exact: true }).fill(request);
+  await page
+    .getByRole("button", { name: "Preparar construção", exact: true })
+    .click();
+  await expect(
+    page.getByRole("heading", {
+      name: "Templates para este pedido",
+      exact: true,
+    }),
+  ).toBeVisible();
+  await page
+    .getByRole("button", { name: "Revisar pedido", exact: true })
+    .click();
+  const confirmation = page.getByRole("dialog", {
+    name: "Revisar sem anexos?",
+  });
+  await expect(confirmation.getByRole("checkbox")).not.toBeChecked();
+  await confirmation.getByRole("checkbox").check();
+  await confirmation
+    .getByRole("button", { name: "Confirmar e revisar", exact: true })
+    .click();
+  await expect(
+    page.getByRole("heading", {
+      name: "Revise antes de construir",
+      exact: true,
+    }),
+  ).toBeVisible();
+}
+
+export async function showBuildHistory(page: Page) {
+  const conversation = page.getByRole("region", {
+    name: "Conversa de construção",
+    exact: true,
+  });
+  const history = page.locator("details.guided-history");
+  await expect
+    .poll(
+      async () =>
+        (await conversation.isVisible()) || (await history.isVisible()),
+    )
+    .toBe(true);
+  if (await conversation.isVisible()) return;
+  await expect(history).toBeVisible();
+  if (
+    !(await history.evaluate((element) => (element as HTMLDetailsElement).open))
+  )
+    await history.locator(":scope > summary").click();
 }

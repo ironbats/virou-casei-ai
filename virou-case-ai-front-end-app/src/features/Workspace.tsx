@@ -1,12 +1,10 @@
 import { useState } from "react";
-import { ArrowLeft, ShieldCheck } from "lucide-react";
+import { ArrowLeft } from "lucide-react";
 import { Link, useParams } from "react-router-dom";
 import { useSession } from "../app/session";
 import { api, command, date } from "../shared/api";
 import { ErrorNotice, Loading, Modal, useLoad } from "../shared/ui";
 import type { Page, Project, Revision } from "../shared/types";
-import { PublicationControl } from "./PublicationControl";
-import { useProjectOperations } from "./useProjectOperations";
 import { ProjectWorkspace } from "./ProjectWorkspace";
 export function Workspace() {
   const { projectId } = useParams();
@@ -142,58 +140,4 @@ export function ProjectHistory() {
   );
 }
 
-export function Publish() {
-  const { projectId: pid } = useParams(),
-    { user } = useSession();
-  const { data: project, error } = useLoad(
-    () => api<Project>("/projects/" + pid),
-    [pid],
-  );
-  const operations = useProjectOperations(pid);
-  return (
-    <>
-      <Link className="back-link" to={"/app/projetos/" + pid}>
-        <ArrowLeft size={17} />
-        Voltar ao projeto
-      </Link>
-      <div className="page-heading">
-        <div>
-          <h1>Publicar projeto</h1>
-          <p>Revise sua aplicação antes de colocá-la no ar.</p>
-        </div>
-      </div>
-      <ErrorNotice error={error || operations.error} />
-      {!project && !error && <Loading />}
-      {project && pid && (
-        <section className="panel">
-          <h2>{project.name}</h2>
-          <p>
-            Revisão salva: {project.current_revision_id?.slice(0, 8)}. Confira
-            código e prévia no projeto antes de publicar.
-          </p>
-          <PublicationControl
-            pid={pid}
-            revision={project.current_revision_id}
-            dirty={false}
-            busy={false}
-            operations={operations.items}
-            onAccepted={(op) => {
-              operations.accept(op);
-              operations.refresh();
-            }}
-          />
-        </section>
-      )}
-      <div className="learning-nudge">
-        <ShieldCheck />
-        <div>
-          <h2>Hospedagem e arquivos até o dia 32 do ciclo</h2>
-          <p>
-            Baixe antes de {date(user?.access.purge_at)}. Sem renovação, o
-            acesso aos arquivos termina e o expurgo é processado.
-          </p>
-        </div>
-      </div>
-    </>
-  );
-}
+export { PublicationPage as Publish } from "./PublicationPage";

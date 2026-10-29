@@ -22,11 +22,12 @@ from viracase.domain.rules import RuleError
 from viracase.infrastructure import composition
 from viracase.infrastructure.ai_registry import AIRegistry
 from viracase.infrastructure.credentials import initialize_key
-from viracase.infrastructure.models import Attempt, new_id
+from viracase.infrastructure.models import Attempt, Grant, new_id
 from viracase.infrastructure.provider_errors import report_rejection
 from viracase.infrastructure.providers import HttpModelGateway, ProviderRejected
 from viracase.infrastructure.worker import Worker
 from viracase.interfaces.api import create_app
+from workflow_http import reviewed_message
 
 
 def secret_mount(service):
@@ -50,7 +51,16 @@ def test_public_conversation_runtime_shares_readonly_credential_mount():
         assert re.search(r"^        read_only: true$", mount, re.M)
 
 
+def fund_generation(system):
+    with system["repo"].sessions.begin() as db:
+        for grant in db.scalars(select(Grant).where(Grant.account_id.in_(system["users"]))):
+            increase = max(Decimal(0), Decimal(250) - grant.total)
+            grant.total += increase
+            grant.available += increase
+
+
 def managed_provider(system, provider, mode):
+    fund_generation(system)
     calls = []
 
     def handler(request):
@@ -182,20 +192,11 @@ def project_and_draft(client, headers):
     return project
 
 
-def converse(client, headers, project):
-    response = client.post(
-        f"/api/v1/projects/{project['id']}/conversation",
-        headers={
-            **headers,
-            "Idempotency-Key": "conversation",
-        },
-        json={
-            "brief": "Implemente uma página de tarefas",
-            "policy_version": "2026-10-v1",
-            "base_revision_id": project["current_revision_id"],
-        },
-    )
+def converse(client, headers, project, dependencies):
+    response = reviewed_message(client, headers, project, "conversation", "Implemente uma página de tarefas")
     assert response.status_code == 202, response.text
+    repo, catalog, gateway = dependencies[2:]
+    Worker(repo, gateway, catalog).tick(response.json()["id"])
     response = client.get("/api/v1/operations/" + response.json()["id"])
     assert response.status_code == 200
     return response.json()
@@ -222,12 +223,12 @@ def test_compose_public_runtime_generates_and_applies_managed_code(
     with TestClient(create_app(dependencies=dependencies)) as client:
         headers = login(client, system)
         project = project_and_draft(client, headers)
-        operation = converse(client, headers, project)
+        operation = converse(client, headers, project, dependencies)
         assert operation["state"] == "succeeded", operation
         assert operation["billing_status"] == "settled"
         assert operation["model_label"] is None and "policy" not in operation
         assert repo.project(actor, project["id"])["current_revision_id"] == project["current_revision_id"]
-        assert converse(client, headers, project)["id"] == operation["id"]
+        assert converse(client, headers, project, dependencies)["id"] == operation["id"]
         assert not Worker(repo, gateway, catalog).tick(operation["id"])
         assert len(calls) == (2 if mode == "service_account" else 1)
         with repo.sessions() as db:
@@ -266,14 +267,14 @@ def test_missing_or_unreadable_key_reproduces_pre_dispatch_failure_without_charg
         headers = login(client, system)
         project = project_and_draft(client, headers)
         wallet = repo.wallet(actor)
-        operation = converse(client, headers, project)
+        operation = converse(client, headers, project, dependencies)
         assert operation["state"] == "failed"
         assert operation["error_code"] == "PROVIDER_CONFIGURATION_INVALID"
         assert operation["billing_status"] == "released"
         assert calls == []
         assert repo.wallet(actor) == wallet
         assert repo.project(actor, project["id"])["current_revision_id"] == project["current_revision_id"]
-        assert converse(client, headers, project)["id"] == operation["id"]
+        assert converse(client, headers, project, dependencies)["id"] == operation["id"]
     events = [json.loads(record.message) for record in caplog.records if record.name == "viracase.provider"]
     assert events[-1] == {
         "event": "generation_provider_rejected",

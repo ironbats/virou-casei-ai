@@ -17,6 +17,8 @@ import { PublicationReconcileButton } from "./publication-reconcile";
 import { IntegrationSettings } from "./integration-settings";
 import { Observability } from "./observability";
 import { AISettings } from "./ai-settings";
+import { PreparationSettings } from "./preparation-settings";
+import { GenerationSettings } from "./generation-settings";
 
 import type {
   User,
@@ -55,6 +57,7 @@ function App() {
     [review, setReview] = useState<Record<string, unknown> | null>(null),
     [wallet, setWallet] = useState<Wallet | null>(null);
   const [aiRefresh, setAiRefresh] = useState(0);
+  const [aiConfigurationRefresh, setAiConfigurationRefresh] = useState(0);
   const [integrationRefresh, setIntegrationRefresh] = useState(0);
   const [monitorRefresh, setMonitorRefresh] = useState(0);
   const [draft, setDraft] = useState<Record<string, string>>({});
@@ -315,7 +318,10 @@ function App() {
           );
         })}
       </nav>
-      <main id="main" className={`admin-main${tab === "observability" ? " monitor-main" : ""}`}>
+      <main
+        id="main"
+        className={`admin-main${tab === "observability" ? " monitor-main" : ""}`}
+      >
         <div className="page-heading">
           <div>
             <p className="eyebrow">VIROUCASEAI · OPERAÇÃO MANUAL</p>
@@ -324,22 +330,22 @@ function App() {
                 ? "Contas e acesso"
                 : tab === "observability"
                   ? "Observabilidade"
-                : tab === "operations"
-                  ? "Operações"
-                  : tab === "audit"
-                    ? "Auditoria"
-                    : tab === "ai"
-                      ? "Agentes de IA"
-                      : tab === "integrations"
-                        ? "Integrações e templates"
-                        : "Estado operacional"}
+                  : tab === "operations"
+                    ? "Operações"
+                    : tab === "audit"
+                      ? "Auditoria"
+                      : tab === "ai"
+                        ? "Agentes de IA"
+                        : tab === "integrations"
+                          ? "Integrações e templates"
+                          : "Estado operacional"}
             </h1>
             <p>
               {tab === "observability"
                 ? "Jev, agentes e Cloudflare: acompanhe etapas, falhas e duração das execuções."
                 : tab === "integrations"
-                ? "Contas, conexões e templates em um só lugar, com versões e histórico preservados."
-                : "Pagamentos externos, decisões explícitas e histórico preservado."}
+                  ? "Contas, conexões e templates em um só lugar, com versões e histórico preservados."
+                  : "Pagamentos externos, decisões explícitas e histórico preservado."}
             </p>
           </div>
           {tab === "accounts" && (
@@ -357,8 +363,23 @@ function App() {
             {message}
           </div>
         )}
-        {tab === "observability" && <Observability refreshToken={monitorRefresh} />}
-        {tab === "ai" && <AISettings refreshToken={aiRefresh} />}
+        {tab === "observability" && (
+          <Observability refreshToken={monitorRefresh} />
+        )}
+        {tab === "ai" && (
+          <>
+            <AISettings
+              refreshToken={aiRefresh}
+              onChanged={() => setAiConfigurationRefresh((value) => value + 1)}
+            />
+            <GenerationSettings
+              refreshToken={aiRefresh + aiConfigurationRefresh}
+            />
+            <PreparationSettings
+              refreshToken={aiRefresh + aiConfigurationRefresh}
+            />
+          </>
+        )}
         {tab === "integrations" && (
           <IntegrationSettings refreshToken={integrationRefresh} />
         )}

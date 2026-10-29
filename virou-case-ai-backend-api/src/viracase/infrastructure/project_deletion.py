@@ -131,6 +131,9 @@ def execute_deletion(worker, oid, token, gateway_factory=CloudflareGateway):
         repo.sources.remove_project(actor, pid)
         db.execute(delete(Draft).where(Draft.account_id == actor, Draft.target == pid))
         db.execute(delete(RecommendationRun).where(RecommendationRun.project_id == pid))
+        from viracase.infrastructure.integration_traces import TraceStore
+
+        TraceStore(repo).purge_project(db, project_id=pid)
         db.execute(delete(Revision).where(Revision.project_id == pid))
         for previous in db.scalars(select(Operation).where(Operation.project_id == pid, Operation.id != oid)):
             previous.payload = {}

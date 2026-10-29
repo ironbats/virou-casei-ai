@@ -142,9 +142,11 @@ test("criação, edição, persistência, export e gate de publicação", async 
   ).toBeDisabled();
   await page.goto(projectUrl + "/publicar");
   await expect(
-    page.getByRole("button", { name: "Publicar projeto", exact: true }),
+    page.getByRole("button", { name: "Publicar esta revisão", exact: true }),
   ).toBeDisabled();
-  await expect(page.getByText(/Publicação bloqueada/)).toBeVisible();
+  await expect(page.locator("#publication-reason")).toContainText(
+    "Configuração da hospedagem pendente",
+  );
 });
 
 test("layouts responsivos sem overflow horizontal", async ({ page }, info) => {

@@ -13,6 +13,7 @@ from google.oauth2 import service_account
 from sqlalchemy import select
 
 from viracase.domain.rules import RuleError, aware, canonical_hash, utcnow
+from viracase.infrastructure.agent_execution import validate_model_execution
 from viracase.infrastructure.credentials import CredentialVault
 from viracase.infrastructure.model_discovery import catalog_result, discover_models
 from viracase.infrastructure.models import AIConnection, AIModel, Audit, Idempotency, new_id
@@ -29,11 +30,14 @@ POLICY_KEYS = (
     "effective_at",
     "valid_until",
     "max_output_tokens",
+    "execution",
 )
 
 
-def policy_ready(p):
+def policy_ready(p, provider=None, model=None):
     try:
+        if provider and model:
+            validate_model_execution(provider, model, p)
         prices = [Decimal(p[k]) for k in POLICY_KEYS[:3]]
         return (
             all(x.is_finite() and 0 <= x <= 1_000_000 for x in prices)
@@ -44,9 +48,9 @@ def policy_ready(p):
             and aware(datetime.fromisoformat(p["effective_at"]))
             <= utcnow()
             < aware(datetime.fromisoformat(p["valid_until"]))
-            and 1 <= p["max_output_tokens"] <= 32000
+            and 1 <= p["max_output_tokens"] <= 65536
         )
-    except (KeyError, ValueError, TypeError, ArithmeticError):
+    except (KeyError, ValueError, TypeError, ArithmeticError, RuleError):
         return False
 
 
@@ -75,7 +79,7 @@ def model_dto(m, c):
         "version": m.version,
         "verified": verified,
         "verified_at": m.verified_at.isoformat() if m.verified_at else None,
-        "ready": bool(c.enabled and m.enabled and verified and policy_ready(m.policy)),
+        "ready": bool(c.enabled and m.enabled and verified and policy_ready(m.policy, c.provider, m.model)),
         **m.policy,
     }
 
@@ -198,6 +202,7 @@ class AIRegistry:
         def change(db, operator):
             self.admin(operator)
             c = self.connection(db, cid, True)
+            execution = validate_model_execution(c.provider, data["model"], data)
             m = db.get(AIModel, mid) if mid else None
             if mid and (not m or m.connection_id != cid):
                 raise RuleError("NOT_FOUND", "Modelo indisponível.", 404)
@@ -208,15 +213,16 @@ class AIRegistry:
                 db.add(m)
             else:
                 m.version += 1
-                if m.model != data["model"]:
+                if m.model != data["model"] or m.policy.get("execution") != execution:
                     m.verified_at, m.verified_connection_version = None, None
             m.name, m.model = data["name"], data["model"]
-            m.policy = {k: data[k] for k in POLICY_KEYS}
+            m.policy = {k: data.get(k) for k in POLICY_KEYS}
+            m.policy["execution"] = execution
             if data["enabled"] and not (
                 c.enabled
                 and m.verified_at
                 and m.verified_connection_version == c.version
-                and policy_ready(m.policy)
+                and policy_ready(m.policy, c.provider, m.model)
             ):
                 raise RuleError(
                     "AI_CONFIGURATION_PENDING",
@@ -375,12 +381,15 @@ class AIRegistry:
         policy = claimed["policy"]
         state = "failed"
         try:
+            execution = validate_model_execution(policy["provider"], policy["model"], policy)
+            thinking_budget = (execution or {}).get("thinking_budget") or 0
+            probe_limit = min(policy["max_output_tokens"], max(1024, thinking_budget + 1024))
             result = HttpModelGateway(self.config, transport=self.transport, registry=self).generate(
-                {**policy, "max_output_tokens": min(1024, policy["max_output_tokens"])},
+                {**policy, "max_output_tokens": probe_limit},
                 'Return only a JSON object: {"ok":true}',
                 probe=True,
             )
-            if isinstance(json.loads(result.text), dict):
+            if not result.output_error and isinstance(json.loads(result.text), dict):
                 state = "verified"
         except ProviderUncertain:
             state = "uncertain"

@@ -1,17 +1,14 @@
-import type { Dispatch, SetStateAction } from "react";
+import { useRef, type Dispatch, type SetStateAction } from "react";
 import { command } from "../shared/api";
 import { ErrorNotice, Modal } from "../shared/ui";
-import type {
-  Operation,
-  Project,
-  ProjectDraft,
-  Capabilities,
-} from "../shared/types";
+import type { Project, ProjectDraft, Capabilities } from "../shared/types";
 import type { useDraft } from "./useDraft";
 import { DraftConflict } from "./DraftConflict";
+import { ProposalReview } from "./ProposalReview";
+import type { ReviewSelection, ReviewView } from "./proposalTypes";
 
 type Setter<T> = Dispatch<SetStateAction<T>>;
-type Review = { op: Operation; files: Record<string, string> } | null;
+type Review = ReviewSelection;
 type Remote = { project: Project; files: Record<string, string> } | null;
 type Props = {
   review: Review;
@@ -33,6 +30,9 @@ type Props = {
   dirty: boolean;
   busy: boolean;
   accept: () => Promise<void>;
+  discard: () => Promise<void>;
+  refreshReview: () => Promise<void>;
+  compareCurrent: () => Promise<void>;
   project: Project;
   setProject: Setter<Project | null>;
   draft: ReturnType<typeof useDraft<ProjectDraft>>;
@@ -64,6 +64,9 @@ export function WorkspaceDialogs({
   dirty,
   busy,
   accept,
+  discard,
+  refreshReview,
+  compareCurrent,
   project,
   setProject,
   draft,
@@ -75,52 +78,25 @@ export function WorkspaceDialogs({
   setSelected,
   pid,
 }: Props) {
+  const reviewMemory = useRef(new Map<string, ReviewView>());
   return (
     <>
       {review && (
-        <Modal
-          title="Revise as alterações propostas"
-          close={() => setReview(null)}
-        >
-          <p>
-            Revise o conteúdo antes de aplicar. A revisão atual permanece salva
-            até sua confirmação.
-          </p>
-          {review.op.result_ref.changed_files?.map((f) => (
-            <details key={f.path} open>
-              <summary>
-                {f.path} · {f.change === "created" ? "Criado" : "Alterado"}
-              </summary>
-              <div className="compare-grid">
-                <div>
-                  <h3>Revisão atual</h3>
-                  <pre className="source-preview">
-                    {baseFiles[f.path] ?? "Arquivo novo"}
-                  </pre>
-                </div>
-                <div>
-                  <h3>Proposta</h3>
-                  <pre className="source-preview">{review.files[f.path]}</pre>
-                </div>
-              </div>
-            </details>
-          ))}
-          <p className="small">
-            Estrutura conferida; testes e execução do projeto gerado não foram
-            realizados.
-          </p>
-          {dirty && <p>Salve ou revise seu rascunho antes de aplicar.</p>}
-          <ErrorNotice error={error} />
-          <button
-            className="button primary"
-            disabled={
-              blocked || dirty || !!review.op.result_ref.applied_revision_id
-            }
-            onClick={accept}
-          >
-            Aplicar alterações revisadas
-          </button>
-        </Modal>
+        <ProposalReview
+          key={review.proposal.proposal_version}
+          pid={pid}
+          proposal={review.proposal}
+          busy={busy}
+          blocked={blocked}
+          dirty={dirty}
+          error={error}
+          memory={reviewMemory.current}
+          onClose={() => setReview(null)}
+          onApply={accept}
+          onDiscard={discard}
+          onRefresh={refreshReview}
+          onCompare={compareCurrent}
+        />
       )}
       {remote && (
         <Modal

@@ -1,8 +1,18 @@
+from typing import Annotated
+
 from fastapi import Depends
 
+from viracase.infrastructure.clarifications import Clarifications
 from viracase.infrastructure.guided_build import GuidedBuild
 from viracase.infrastructure.recommendations import Recommendations
-from viracase.interfaces.feature_schemas import BuildDraftInput, BuildSendInput, RecommendationInput
+from viracase.interfaces.feature_schemas import (
+    BuildDraftInput,
+    BuildFillInput,
+    BuildReviewInput,
+    BuildSendInput,
+    ClarificationReplyInput,
+    RecommendationInput,
+)
 from viracase.interfaces.schemas import TransferInput
 
 
@@ -29,15 +39,35 @@ def mount_guided_routes(app, prefix, repo, learning, generation, actor, key, ver
 
     @app.post(prefix + "/projects/{pid}/recommendations")
     def recommend(pid: str, data: RecommendationInput, who=Depends(actor), intention=Depends(key)):
-        return Recommendations(guided).recommend(who["id"], pid, intention, data.model_dump())
+        return Recommendations(guided).recommend(
+            who["id"], pid, intention, data.model_dump(exclude_unset=True)
+        )
 
     @app.get(prefix + "/projects/{pid}/recommendations/{identity}")
     def recommendation(pid: str, identity: str, who=Depends(actor)):
         return Recommendations(guided).get(who["id"], pid, identity)
 
+    @app.post(prefix + "/projects/{pid}/build-review")
+    def review(pid: str, data: BuildReviewInput, who=Depends(actor), intention=Depends(key)):
+        return guided.review(who["id"], pid, intention, data.model_dump())
+
+    @app.post(prefix + "/projects/{pid}/build-fill", status_code=202)
+    def retry_fill(pid: str, data: BuildFillInput, who=Depends(actor), intention=Depends(key)):
+        return guided.retry_fill(who["id"], pid, intention, data.model_dump(exclude_none=True))
+
     @app.post(prefix + "/projects/{pid}/messages", status_code=202)
     def send(pid: str, data: BuildSendInput, who=Depends(actor), intention=Depends(key)):
         return guided.send(who["id"], pid, intention, data.model_dump(), generation)
+
+    @app.post(prefix + "/projects/{pid}/messages/{oid}/reply", status_code=202)
+    def reply(
+        pid: str,
+        oid: str,
+        data: ClarificationReplyInput,
+        who: Annotated[dict, Depends(actor)],
+        intention: Annotated[str, Depends(key)],
+    ):
+        return Clarifications(repo).reply(who["id"], pid, oid, intention, data.model_dump(), generation)
 
     @app.post(prefix + "/projects/{pid}/proposals/{oid}/discard")
     def discard(pid: str, oid: str, who=Depends(actor), intention=Depends(key)):

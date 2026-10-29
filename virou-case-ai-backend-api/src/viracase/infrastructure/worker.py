@@ -11,6 +11,7 @@ from sqlalchemy import delete, select, update
 from viracase.application.generation import generated_files, generation_prompt
 from viracase.application.progress import record_progress
 from viracase.domain.rules import RuleError, aware, cost, utcnow, validate_files
+from viracase.infrastructure.agent_execution import execution_timeouts
 from viracase.infrastructure.models import (
     Account,
     Attempt,
@@ -27,9 +28,10 @@ from viracase.infrastructure.models import (
     new_id,
 )
 from viracase.infrastructure.provider_errors import report_rejection
-from viracase.infrastructure.publication_logging import emit, exception_fields, publication_context
 from viracase.infrastructure.providers import ProviderRejected, ProviderUncertain
+from viracase.infrastructure.publication_logging import emit, exception_fields, publication_context
 from viracase.infrastructure.repository import project_dto
+from viracase.infrastructure.workflow_logging import emit as emit_workflow
 
 log = logging.getLogger("viracase.worker")
 
@@ -82,6 +84,19 @@ class Worker:
                     op.state, job.state = "queued", "queued"
                     op.progress_stage = "queued"
                 record_progress(op, op.progress_stage)
+                if op.type in {"template_preparation", "template_autofill"}:
+                    emit_workflow("preparation_worker_recovered", "warning", operation=op,
+                                  phase="recovery", state=op.state, error_code=op.error_code)
+                elif op.type == "generation":
+                    emit_workflow(
+                        "generation_worker_recovered", "warning", operation=op,
+                        phase="recovery", state=op.state, error_code=op.error_code,
+                        transaction_state="pending_commit", secrets=self.repo.sources.secrets,
+                    )
+                if op.type == "template_preparation" and op.payload.get("automatic_apply") and op.state != "queued":
+                    from viracase.infrastructure.build_workflow import apply_automatic
+
+                    apply_automatic(self.repo, db, op)
                 job.lease_token = None
 
     def tick(self, operation_id=None):
@@ -98,13 +113,17 @@ class Worker:
             if not job:
                 return False
             oid, token = job.operation_id, new_id()
+            operation = db.get(Operation, oid)
+            request_timeout = self.repo.config.provider_timeout
+            if operation.type in {"generation", "template_preparation"}:
+                request_timeout, _ = execution_timeouts(operation.policy, request_timeout)
             claimed = db.execute(
                 update(Job)
                 .where(Job.id == job.id, Job.state == "queued")
                 .values(
                     state="running",
                     lease_token=token,
-                    lease_until=utcnow() + timedelta(seconds=self.repo.config.provider_timeout + 120),
+                    lease_until=utcnow() + timedelta(seconds=request_timeout + 120),
                 )
             )
             if claimed.rowcount != 1:
@@ -132,11 +151,33 @@ class Worker:
                     op.state, job.state = "failed", "done"
                 op.error_code = exc.code if isinstance(exc, RuleError) else "PROCESSING_FAILED"
                 record_progress(op, op.state)
+                if op.type in {"template_preparation", "template_autofill"}:
+                    emit_workflow("preparation_worker_failed", "error", operation=op, error=exc,
+                                  phase="worker", state=op.state, error_code=op.error_code)
+                elif op.type == "generation":
+                    emit_workflow(
+                        "generation_worker_failed", "error", operation=op, error=exc,
+                        phase="worker", state=op.state, error_code=op.error_code,
+                        transaction_state="pending_commit", secrets=self.repo.sources.secrets,
+                    )
+                if op.type == "template_autofill" and op.state == "failed":
+                    from viracase.infrastructure.build_workflow import fail_scheduled
+
+                    fail_scheduled(self.repo, db, op, op.error_code)
+                if op.type == "template_preparation" and op.payload.get("automatic_apply"):
+                    from viracase.infrastructure.build_workflow import apply_automatic
+
+                    apply_automatic(self.repo, db, op)
         return True
 
     def execute(self, oid, token):
         with self.repo.sessions() as db:
             current = db.get(Operation, oid)
+            if current.type == "template_autofill":
+                from viracase.infrastructure.build_workflow import execute_autofill
+
+                return execute_autofill(self, oid, token)
+            preparation = current.type == "template_preparation"
             if current.type == "project_deletion":
                 from viracase.infrastructure.project_deletion import execute_deletion
 
@@ -153,6 +194,10 @@ class Worker:
                 from viracase.infrastructure.conversation_generation import execute_conversation
 
                 return execute_conversation(self, oid, token)
+        if preparation:
+            from viracase.infrastructure.preparation_worker import execute_preparation
+
+            return execute_preparation(self, oid, token)
         with self.repo.sessions.begin() as db:
             op = db.get(Operation, oid)
             a = self.repo.account(db, op.account_id, True)
@@ -220,8 +265,13 @@ class Worker:
                 Attempt(operation_id=oid, provider=policy["provider"], model=policy["model"], state="sent")
             )
             record_progress(op, "provider_sent")
+            request_timeout, _ = execution_timeouts(policy, self.repo.config.provider_timeout)
+            job.lease_until = utcnow() + timedelta(seconds=request_timeout * 2 + 120)
         try:
-            result = self.gateway.generate(policy, prompt)
+            from viracase.infrastructure.integration_traces import observe_integration, trace_context
+
+            with observe_integration(self.repo, trace_context(self.repo, op, "construction")):
+                result = self.gateway.generate(policy, prompt)
         except ProviderRejected as exc:
             report_rejection(oid, exc)
             self.finish_error(oid, token, uncertain=False, error_code=exc.error_code)
@@ -428,6 +478,9 @@ class Worker:
                 op.payload, op.result, op.project_id = {}, {}, None
             db.flush()
             db.execute(delete(RecommendationRun).where(RecommendationRun.account_id == aid))
+            from viracase.infrastructure.integration_traces import TraceStore
+
+            TraceStore(self.repo).purge_project(db, account_id=aid)
             db.execute(delete(PublicationResource).where(PublicationResource.account_id == aid))
             db.execute(delete(Draft).where(Draft.account_id == aid))
             db.execute(delete(Revision).where(Revision.account_id == aid))

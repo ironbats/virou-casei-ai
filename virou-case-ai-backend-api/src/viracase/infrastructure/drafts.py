@@ -6,7 +6,7 @@ from sqlalchemy import select, update
 
 from viracase.application.progress import record_progress
 from viracase.domain.rules import RuleError, utcnow, validate_file_entries
-from viracase.infrastructure.models import Draft, Operation
+from viracase.infrastructure.models import Draft
 
 
 def dto(row, data=None):
@@ -147,35 +147,25 @@ class Drafts:
 
         return self.repo.mutate(actor, f"transfer:{slug}", key, payload, command, "write")
 
-    def apply(self, actor, pid, oid, key, version):
+    def apply(self, actor, pid, oid, key, version, guards=None):
+        from viracase.infrastructure.proposal_review import ProposalReviews
+
         def command(db, a):
-            p = self.repo.owned_project(db, actor, pid)
-            op = db.scalar(
-                select(Operation).where(
-                    Operation.id == oid,
-                    Operation.account_id == actor,
-                    Operation.project_id == pid,
-                    Operation.type == "generation",
-                )
-            )
-            if (
-                not op
-                or op.state != "succeeded"
-                or not op.result.get("candidate")
-                or op.result.get("discarded_at")
-            ):
-                raise RuleError("NOT_FOUND", "Proposta indisponível.", 404)
+            p, op, r, draft = ProposalReviews(self.repo).validate_apply(db, actor, pid, oid, guards)
+            if op.result.get("applied_revision_id"):
+                return {"revision_id": op.result["applied_revision_id"]}
             if p.version != version or p.current_revision_id != op.payload.get("base_revision_id"):
                 raise RuleError(
                     "VERSION_CONFLICT", "A base mudou. Compare a proposta com a revisão atual.", 412
                 )
-            if op.result.get("applied_revision_id"):
-                return {"revision_id": op.result["applied_revision_id"]}
-            r = self.repo.owned_revision(db, actor, pid, op.result["revision_id"])
-            # Accept this immutable revision; no duplicate revision or additional quota consumed.
             p.current_revision_id, p.version, r.candidate = r.id, p.version + 1, False
             op.result = {**op.result, "applied_revision_id": r.id}
+            if draft and guards:
+                draft.data = {**draft.data, "base_revision_id": r.id, "files": None}
+                draft.version += 1
+                draft.updated_at = utcnow()
             record_progress(op, "changes_applied")
             return {"revision_id": r.id}
 
-        return self.repo.mutate(actor, f"apply:{oid}", key, {"version": version}, command, "write")
+        payload = {"version": version, **({"guards": guards} if guards else {})}
+        return self.repo.mutate(actor, f"apply:{oid}", key, payload, command, "write")

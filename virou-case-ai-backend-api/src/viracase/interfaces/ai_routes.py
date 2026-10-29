@@ -8,6 +8,12 @@ def mount_ai_routes(app, prefix, repo, catalog, actor, key):
     registry = getattr(catalog, "registry", None) or AIRegistry(repo)
     actor_dependency, intention_dependency = Depends(actor), Depends(key)
 
+    @app.get(prefix + "/ai/configuration-schema")
+    def configuration(who=actor_dependency):
+        from viracase.infrastructure.agent_execution import configuration_schema
+
+        return configuration_schema(catalog)
+
     @app.get(prefix + "/ai/connections")
     def connections(who=actor_dependency):
         return registry.listing()

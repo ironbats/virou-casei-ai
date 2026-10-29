@@ -76,7 +76,7 @@ export function useDraft<T>(
     setError(null);
     pending.current = (async () => {
       try {
-        const response = await command<{ version: number }>(
+        const response = await command<{ version: number; data?: T }>(
           path,
           body,
           "PUT",
@@ -85,6 +85,28 @@ export function useDraft<T>(
         version.current = response.version;
         saved.current = encoded;
         snapshot.current = submitted;
+        if (response.data !== undefined) {
+          const next =
+            current.current &&
+            JSON.stringify(serialize.current(current.current)) !== encoded
+              ? merge?.(current.current, submitted, response.data)
+              : response.data;
+          if (next) {
+            current.current = next;
+            snapshot.current = response.data;
+            saved.current = JSON.stringify(serialize.current(response.data));
+            if (alive.current) render(next);
+          } else if (alive.current) {
+            blocked.current = true;
+            setConflict({
+              version: response.version,
+              updated_at: null,
+              data: response.data,
+            });
+            setStatus("Compare as alterações do rascunho");
+            return;
+          }
+        }
         if (alive.current) setStatus("Rascunho salvo");
       } catch (e) {
         if (alive.current) {
@@ -171,6 +193,7 @@ export function useDraft<T>(
     if (pending.current) await pending.current;
     const remote = await api<Draft<T>>(path);
     if (!alive.current || scope.current !== path) return;
+    if (remote.version < version.current) return;
     const unchanged =
       current.current &&
       JSON.stringify(serialize.current(current.current)) === saved.current;

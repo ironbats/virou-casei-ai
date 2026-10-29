@@ -85,7 +85,7 @@ class GenerationService:
         from viracase.infrastructure.guided_build import attachment_context
 
         command = f"guided-send:{project_id}" if payload.get("guided_request") else f"generation:{project_id}"
-        intention = payload.get("guided_request", payload)
+        intention = payload.get("guided_request", payload.get("reply_request", payload))
         previous = self.repository.recover_intention(actor, command, key, intention)
         if previous is not None:
             return self.repository.operation(actor, previous["id"])
@@ -98,28 +98,84 @@ class GenerationService:
             if project["current_revision_id"]
             else {}
         )
-        prompt = generation_prompt(project, attachment_context(payload), files)
-        policy, ceiling = self.catalog.resolve(prompt)
         if contract_version in {3, 4}:
             from decimal import Decimal
 
-            from viracase.application.conversation import INPUT_BOUND, MAX_BATCHES, prompt_for
+            from viracase.application.conversation import (
+                INPUT_BOUND,
+                context_input_bound,
+                generation_call_limit,
+                generation_recovery_policy,
+                prompt_for,
+            )
+            from viracase.application.conversation_turn import turn_prompt
             from viracase.domain.rules import cost, money
+            from viracase.infrastructure.agent_execution import freeze_execution
+            from viracase.infrastructure.clarifications import continuation_files
+            from viracase.infrastructure.integrations import Integrations
+            from viracase.infrastructure.workflow_logging import emit as emit_workflow
 
-            prompt_for(project, attachment_context(payload), files)
-            # Reserve the worst bounded envelope before any provider call; release unused capacity.
+            if contract_version == 4 and payload.get("reply_to"):
+                files, _ = continuation_files(payload, files, self.repository.sources.secrets)
+
+            construction = payload.get("construction_configuration") or Integrations(self.repository).build_configuration()
+            call_policy = construction["settings"]
+            max_batches = generation_call_limit({"max_batches": call_policy["max_generation_calls"]})
+            input_budget = INPUT_BOUND * max_batches
+            context_policy = {
+                "generation_context_version": 2,
+                "generation_input_budget": input_budget,
+                "reserved_input_bound": INPUT_BOUND,
+                "max_batches": max_batches,
+                "generation_runtime_version": 1,
+                "construction_policy_version": construction["version"],
+                **generation_recovery_policy(call_policy),
+            }
+            builder = turn_prompt if contract_version == 4 else prompt_for
+            try:
+                prompt = builder(
+                    project,
+                    attachment_context(payload),
+                    files,
+                    input_bound=context_input_bound(context_policy, payload),
+                    request_limit_bytes=payload.get("context_limit_bytes", 60000),
+                    max_batches=max_batches,
+                    **({"history": payload.get("history", [])} if contract_version == 4 else {}),
+                )
+            except RuleError as exc:
+                emit_workflow(
+                    "generation_context_rejected",
+                    "error",
+                    error=exc,
+                    secrets=getattr(getattr(self.repository, "sources", None), "secrets", ()),
+                    phase="admission",
+                    state="rejected",
+                    transaction_state="not_reserved",
+                    account_id=actor,
+                    project_id=project_id,
+                    trace_id=payload.get("correlation_id"),
+                    preparation_id=payload.get("preparation_id"),
+                    **exc.details,
+                )
+                raise
+            model_id = call_policy.get("generation_model_id")
+            policy, _ = self.catalog.resolve(prompt, model_id=model_id) if model_id else self.catalog.resolve(prompt)
+            policy = freeze_execution(policy, self.repository.config.provider_timeout)
             ceiling = money(
                 cost(
                     policy,
                     {
-                        "input": INPUT_BOUND * MAX_BATCHES,
+                        "input": input_budget,
                         "cached": 0,
-                        "output": policy["max_output_tokens"] * MAX_BATCHES,
+                        "output": policy["max_output_tokens"] * max_batches,
                     },
                 )
                 * Decimal("1.10")
             )
-            policy = {**policy, "reserved_input_bound": INPUT_BOUND, "max_batches": MAX_BATCHES}
+            policy = {**policy, **context_policy}
+        else:
+            prompt = generation_prompt(project, attachment_context(payload), files)
+            policy, ceiling = self.catalog.resolve(prompt)
         policy = {**policy, "generation_contract_version": contract_version}
         return self.repository.create_operation(
             actor, project_id, "generation", key, payload, policy, ceiling

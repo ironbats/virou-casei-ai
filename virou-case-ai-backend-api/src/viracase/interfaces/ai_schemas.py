@@ -22,6 +22,29 @@ class ConnectionInput(Input):
     reason: Reason = "Configuração administrativa de IA"
 
 
+class ModelExecution(Input):
+    request_timeout_seconds: int = Field(default=180, ge=10, le=600, strict=True)
+    connect_timeout_seconds: int = Field(default=10, ge=1, le=30, strict=True)
+    temperature: float | None = Field(default=None, ge=0, le=2)
+    top_p: float | None = Field(default=None, gt=0, le=1)
+    thinking_mode: Literal["auto", "provider_default", "budget", "level"] = "auto"
+    thinking_budget: int | None = Field(default=None, ge=-1, le=32768, strict=True)
+    thinking_level: Literal["minimal", "low", "medium", "high"] | None = None
+    reasoning_effort: Literal["none", "minimal", "low", "medium", "high", "xhigh", "max"] | None = None
+
+    @model_validator(mode="after")
+    def compatible_options(self):
+        if self.connect_timeout_seconds > self.request_timeout_seconds:
+            raise ValueError("O prazo de conexão não pode exceder o prazo da requisição.")
+        if self.temperature is not None and self.top_p is not None:
+            raise ValueError("Configure somente temperature ou top_p.")
+        if (self.thinking_mode == "budget") != (self.thinking_budget is not None):
+            raise ValueError("Informe thinking_budget somente no modo budget.")
+        if (self.thinking_mode == "level") != (self.thinking_level is not None):
+            raise ValueError("Informe thinking_level somente no modo level.")
+        return self
+
+
 class ModelInput(Input):
     model: Identifier
     name: Short
@@ -35,7 +58,8 @@ class ModelInput(Input):
     evidence: Annotated[str, StringConstraints(strip_whitespace=True, max_length=300)]
     effective_at: datetime
     valid_until: datetime
-    max_output_tokens: int = Field(ge=1, le=32000, strict=True)
+    max_output_tokens: int = Field(ge=1, le=65536, strict=True)
+    execution: ModelExecution | None = None
     reason: Reason = "Configuração administrativa de modelo"
 
     @model_validator(mode="after")

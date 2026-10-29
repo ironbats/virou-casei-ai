@@ -1,5 +1,6 @@
 import { expect, test, type Page } from "@playwright/test";
 import { generateKeyPairSync } from "node:crypto";
+import AxeBuilder from "@axe-core/playwright";
 
 async function login(page: Page) {
   await page.goto("/");
@@ -147,6 +148,118 @@ test("IA: configurar, descobrir, testar, habilitar e desabilitar um modelo", asy
     path: info.outputPath("ai-ready.png"),
     fullPage: true,
   });
+  await page.getByRole("button", { name: "Editar modelo" }).click();
+  dialog = page.getByRole("dialog");
+  await dialog.getByRole("checkbox", { name: "Personalizar execução" }).check();
+  await dialog
+    .getByLabel("Tempo máximo da chamada (segundos)", { exact: true })
+    .fill("240");
+  await dialog
+    .getByLabel("Tempo máximo de conexão (segundos)", { exact: true })
+    .fill("15");
+  await dialog
+    .getByLabel("Limite de tokens de saída", { exact: true })
+    .fill("32000");
+  await expect(
+    dialog.getByRole("combobox", { name: /^Amostragem/ }).locator("option"),
+  ).toHaveCount(1);
+  await expect(
+    dialog
+      .getByRole("combobox", { name: /^Controle de raciocínio/ })
+      .locator("option"),
+  ).toHaveCount(2);
+  const executionWrite = page.waitForRequest(
+    (request) =>
+      request.method() === "POST" &&
+      /\/models\/[^/]+$/.test(new URL(request.url()).pathname),
+  );
+  await dialog.getByRole("button", { name: "Salvar configuração" }).click();
+  const executionRequest = await executionWrite;
+  expect(executionRequest.postDataJSON()).toMatchObject({
+    enabled: false,
+    max_output_tokens: 32000,
+    execution: {
+      request_timeout_seconds: 240,
+      connect_timeout_seconds: 15,
+      temperature: null,
+      top_p: null,
+      thinking_mode: "auto",
+      thinking_budget: null,
+      thinking_level: null,
+      reasoning_effort: null,
+    },
+  });
+  expect(executionRequest.headers()["idempotency-key"]).toBeTruthy();
+  await expect(dialog).toHaveCount(0);
+  await expect(
+    page.getByText("Teste necessário", { exact: true }),
+  ).toBeVisible();
+  await page.reload();
+  await expect(
+    page.getByRole("heading", { name: "Contas e acesso" }),
+  ).toBeVisible();
+  await page
+    .getByRole("button", { name: "Agentes de IA", exact: true })
+    .click();
+  await page.getByRole("button", { name: "Editar modelo" }).click();
+  dialog = page.getByRole("dialog");
+  await expect(
+    dialog.getByRole("checkbox", { name: "Personalizar execução" }),
+  ).toBeChecked();
+  await expect(
+    dialog.getByLabel("Tempo máximo da chamada (segundos)", { exact: true }),
+  ).toHaveValue("240");
+  await expect(
+    dialog.getByLabel("Tempo máximo de conexão (segundos)", { exact: true }),
+  ).toHaveValue("15");
+  await expect(
+    dialog.getByLabel("Limite de tokens de saída", { exact: true }),
+  ).toHaveValue("32000");
+  await expect(
+    dialog.getByLabel("Habilitar para uso na plataforma"),
+  ).toBeDisabled();
+  for (const width of [320, 375, 768, 1024, 1440]) {
+    await page.setViewportSize({ width, height: 960 });
+    await dialog
+      .getByLabel("Limite de tokens de saída", { exact: true })
+      .scrollIntoViewIfNeeded();
+    expect(
+      await dialog.evaluate(
+        (element) => element.scrollWidth <= element.clientWidth + 1,
+      ),
+    ).toBe(true);
+    await page.screenshot({
+      path: info.outputPath(`model-execution-${width}.png`),
+      fullPage: true,
+    });
+  }
+  expect(
+    (
+      await new AxeBuilder({ page })
+        .include(".ai-dialog")
+        .withTags(["wcag2a", "wcag2aa"])
+        .analyze()
+    ).violations,
+  ).toEqual([]);
+  await dialog.getByRole("checkbox", { name: "Personalizar execução" }).focus();
+  await page.keyboard.press("Tab");
+  await expect(
+    dialog.getByLabel("Tempo máximo da chamada (segundos)", { exact: true }),
+  ).toBeFocused();
+  await page.keyboard.press("Escape");
+  await page
+    .getByRole("button", { name: "Testar geração", exact: true })
+    .click();
+  await page
+    .getByRole("button", { name: "Confirmar teste com possível cobrança" })
+    .click();
+  await expect(page.getByRole("status")).toContainText("Teste concluído");
+  await page.getByRole("button", { name: "Editar modelo" }).click();
+  await page.getByLabel("Habilitar para uso na plataforma").check();
+  await page.getByRole("button", { name: "Salvar configuração" }).click();
+  await expect(
+    page.getByText("Pronto para uso", { exact: true }),
+  ).toBeVisible();
   await page.getByRole("button", { name: "Editar conexão" }).click();
   await expect(page.getByLabel("API key", { exact: true })).toHaveValue("");
   await page.getByLabel("Conexão habilitada").uncheck();
@@ -240,6 +353,33 @@ test("Google Service Account: catálogo local, recusa segura, configuração man
     "future-unlisted-model",
   );
   await dialog.getByLabel("Identificador do modelo").fill("gemini-2.5-flash");
+  await dialog.getByRole("checkbox", { name: "Personalizar execução" }).check();
+  await dialog
+    .getByLabel("Limite de tokens de saída", { exact: true })
+    .fill("65000");
+  await dialog
+    .getByRole("combobox", { name: /^Amostragem/ })
+    .selectOption("temperature");
+  await dialog.getByLabel("Temperatura", { exact: true }).fill("0.2");
+  await dialog
+    .getByRole("combobox", { name: /^Controle de raciocínio/ })
+    .selectOption("budget");
+  const budget = dialog.getByLabel("Orçamento de raciocínio (tokens)", {
+    exact: true,
+  });
+  const maximumBudget = Number(await budget.getAttribute("max"));
+  await budget.fill(String(maximumBudget + 1));
+  expect(
+    await budget.evaluate((element: HTMLInputElement) =>
+      element.checkValidity(),
+    ),
+  ).toBe(false);
+  await budget.fill("0");
+  expect(
+    await budget.evaluate((element: HTMLInputElement) =>
+      element.checkValidity(),
+    ),
+  ).toBe(true);
   await page.setViewportSize({ width: 375, height: 900 });
   expect(
     await dialog.evaluate((el) => el.scrollWidth <= el.clientWidth),
@@ -262,6 +402,15 @@ test("Google Service Account: catálogo local, recusa segura, configuração man
   await expect(page.getByLabel("Nome para identificação")).toHaveValue(
     "Google manual E2E",
   );
+  await expect(
+    page.getByLabel("Limite de tokens de saída", { exact: true }),
+  ).toHaveValue("65000");
+  await expect(page.getByLabel("Temperatura", { exact: true })).toHaveValue(
+    "0.2",
+  );
+  await expect(
+    page.getByLabel("Orçamento de raciocínio (tokens)", { exact: true }),
+  ).toHaveValue("0");
   await page.getByLabel("Habilitar para uso na plataforma").check();
   await page.getByRole("button", { name: "Salvar configuração" }).click();
   await expect(connection).toContainText("Pronto para uso");

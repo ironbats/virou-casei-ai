@@ -2,7 +2,7 @@ import json
 import re
 from dataclasses import dataclass
 
-from viracase.application.conversation import INPUT_BOUND, MAX_BATCHES, response_schema
+from viracase.application.conversation import INPUT_BOUND, MAX_BATCHES, context_prompt, response_schema
 from viracase.domain.rules import RuleError
 
 
@@ -32,9 +32,21 @@ def turn_schema():
 
 
 def turn_prompt(
-    project, brief, files, batch=0, smaller=False, output_tokens=16000, history=(), feedback=None
+    project,
+    brief,
+    files,
+    batch=0,
+    smaller=False,
+    output_tokens=16000,
+    history=(),
+    feedback=None,
+    *,
+    input_bound=INPUT_BOUND,
+    request_limit_bytes=None,
+    max_batches=MAX_BATCHES,
+    character_budget=None,
 ):
-    budget = max(500, min(24000, output_tokens * (1 if smaller else 2)))
+    budget = character_budget if character_budget is not None else max(500, min(24000, output_tokens * (1 if smaller else 2)))
     instruction = (
         "Você ajuda a construir o projeto conversando em português. Leia o pedido, o histórico e os arquivos atuais. "
         "Se o objetivo estiver claro, implemente; faça escolhas técnicas razoáveis sem pedir autorização repetida. "
@@ -64,23 +76,20 @@ def turn_prompt(
             "Para corrigir edições que não encontram o trecho, envie o conteúdo integral do arquivo em files. "
             "Use exclusivamente o estado atual fornecido abaixo.\n"
         )
-    prompt = instruction + json.dumps(
+    return context_prompt(
+        instruction,
         {
             "stack": project["stack"],
             "objective": project["objective"],
             "request": brief,
             "history": list(history),
             "batch": batch + 1,
-            "batches_remaining": MAX_BATCHES - batch,
+            "batches_remaining": max_batches - batch,
             "files": files,
         },
-        ensure_ascii=False,
+        input_bound,
+        request_limit_bytes,
     )
-    if len(prompt.encode()) + 4096 > INPUT_BOUND:
-        raise RuleError(
-            "CONTEXT_LIMIT_EXCEEDED", "O contexto excede o limite de geração. Seu código foi preservado.", 400
-        )
-    return prompt
 
 
 def parse_turn(text, existing):

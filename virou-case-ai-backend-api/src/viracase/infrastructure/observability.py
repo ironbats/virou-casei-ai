@@ -8,6 +8,8 @@ from viracase.infrastructure.models import Operation, RecommendationRun, Runtime
 
 SERVICES = {
     "generation": "agents",
+    "template_preparation": "agents",
+    "template_autofill": "agents",
     "publication": "cloudflare",
     "publication_check": "cloudflare",
     "project_deletion": "platform",
@@ -40,6 +42,7 @@ def install_events(sessions):
                     "RECOMMENDER_DISABLED",
                     "RECOMMENDER_UNAVAILABLE",
                     "RECOMMENDATION_PENDING",
+                    "RECOMMENDATION_OUTCOME_UNKNOWN",
                     "JEV_TIMEOUT",
                     "JEV_ACCESS_DENIED",
                     "JEV_RATE_LIMITED",
@@ -79,7 +82,7 @@ def require_admin(repo, db, actor):
         raise RuleError("FORBIDDEN", "Monitoria disponível apenas no backoffice.", 403)
 
 
-def events(repo, actor, service=None, level=None, correlation=None, project=None, before=None, limit=100):
+def events(repo, actor, service=None, level=None, correlation=None, project=None, before=None, limit=100, phase=None, state=None, since=None, until=None):
     with repo.sessions() as db:
         require_admin(repo, db, actor)
         query = select(RuntimeEvent).where(RuntimeEvent.created_at >= utcnow() - timedelta(days=7))
@@ -88,11 +91,25 @@ def events(repo, actor, service=None, level=None, correlation=None, project=None
             (level, RuntimeEvent.level),
             (correlation, RuntimeEvent.correlation_id),
             (project, RuntimeEvent.project_id),
+            (state, RuntimeEvent.state),
         ):
             if value:
                 query = query.where(column == value)
         if before:
             query = query.where(RuntimeEvent.id < before)
+        if phase == "recommendation":
+            query = query.where(RuntimeEvent.service == "jev")
+        elif phase in {"preparation", "construction"}:
+            types = ("template_preparation", "template_autofill") if phase == "preparation" else ("generation",)
+            query = query.where(
+                RuntimeEvent.correlation_id.in_(select(Operation.id).where(Operation.type.in_(types)))
+            )
+        elif phase == "review":
+            query = query.where(RuntimeEvent.stage.in_(["proposal_ready", "proposal_discarded", "changes_applied", "preparation_ready", "preparation_needs_input"]))
+        if since:
+            query = query.where(RuntimeEvent.created_at >= since)
+        if until:
+            query = query.where(RuntimeEvent.created_at <= until)
         rows = db.scalars(query.order_by(RuntimeEvent.id.desc()).limit(limit + 1)).all()
         return {
             "items": [
@@ -177,3 +194,6 @@ def heartbeat(repo, identity, diagnostics):
 def prune(repo):
     with repo.sessions.begin() as db:
         db.execute(delete(RuntimeEvent).where(RuntimeEvent.created_at < utcnow() - timedelta(days=7)))
+    from viracase.infrastructure.integration_traces import TraceStore
+
+    TraceStore(repo).prune()

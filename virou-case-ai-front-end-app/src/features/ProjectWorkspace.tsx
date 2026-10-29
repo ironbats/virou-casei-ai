@@ -21,6 +21,7 @@ import type {
 } from "../shared/types";
 import { GuidedBuildPanel } from "./GuidedBuildPanel";
 import { PublicationControl } from "./PublicationControl";
+import type { Proposal, ReviewSelection } from "./proposalTypes";
 import { BuildConversation } from "./BuildConversation";
 import { useProjectOperations, inProgress } from "./useProjectOperations";
 import { useDraft } from "./useDraft";
@@ -78,20 +79,19 @@ export function ProjectWorkspace() {
     [message, setMessage] = useState(""),
     [reuseRequest, setReuseRequest] = useState<string | null>(null),
     [replyTo, setReplyTo] = useState<string | null>(null),
+    [replyText, setReplyText] = useState(""),
+    [replyFocusRequest, setReplyFocusRequest] = useState(0),
+    [followRequest, setFollowRequest] = useState(0),
     [newFile, setNewFile] = useState(false),
     [editing, setEditing] = useState(false),
     [exporting, setExporting] = useState(false),
-    [review, setReview] = useState<{
-      op: Operation;
-      files: Record<string, string>;
-    } | null>(null),
+    [review, setReview] = useState<ReviewSelection>(null),
     [remote, setRemote] = useState<{
       project: Project;
       files: Record<string, string>;
     } | null>(null);
   const buildFlush = useRef<() => Promise<void>>(async () => {});
-  const input = useRef<HTMLTextAreaElement>(null),
-    tracking = useProjectOperations(pid);
+  const tracking = useProjectOperations(pid);
   const canWrite = !!user?.access.allowed_actions.includes("write"),
     canExport = user?.access.allowed_actions.includes("export");
   const files = draft.data?.files ?? baseFiles ?? {},
@@ -104,16 +104,27 @@ export function ProjectWorkspace() {
     );
   const syncedOperations = useRef(new Set<string>());
   const syncFailedAt = useRef(0);
-  const currentScope = useRef(pid);
+  const currentScope = useRef(pid),
+    proposalAction = useRef(false),
+    mounted = useRef(true);
   currentScope.current = pid;
+  useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+    };
+  }, []);
   const latestBuild = tracking.items.find((o) => o.type === "generation");
   useEffect(() => {
-    if (
+    setReplyText("");
+    setReplyFocusRequest(0);
+    setReplyTo(
       latestBuild?.state === "succeeded" &&
-      latestBuild.result_ref.kind === "clarification"
-    )
-      setReplyTo(latestBuild.id);
-  }, [latestBuild?.id, latestBuild?.state, latestBuild?.result_ref.kind]);
+        latestBuild.result_ref.kind === "clarification"
+        ? latestBuild.id
+        : null,
+    );
+  }, [pid, latestBuild?.id, latestBuild?.state, latestBuild?.result_ref.kind]);
   useEffect(() => {
     if (
       !project ||
@@ -214,7 +225,7 @@ export function ProjectWorkspace() {
       setMobile("chat");
       return;
     }
-    input.current?.focus();
+    document.getElementById("build-idea")?.focus();
     transferFocused.current = true;
   }, [!!draft.data, !!project, !!caps, !!baseFiles, mobile]);
   // Flush draft before internal navigation; failed saves keep the editor and its buffers mounted.
@@ -253,7 +264,7 @@ export function ProjectWorkspace() {
       await fn();
     } catch (e) {
       setError(e);
-      if (e instanceof ApiError && e.code === "VERSION_CONFLICT") {
+      if (e instanceof ApiError && e.code === "VERSION_CONFLICT" && !review) {
         const p = await api<Project>(`/projects/${pid}`);
         setRemote({
           project: p,
@@ -284,38 +295,201 @@ export function ProjectWorkspace() {
     setMessage("Revisão salva.");
     return result.revision.id;
   }
+  async function readProposal(oid: string) {
+    const result = await api<Proposal>(`/projects/${pid}/proposals/${oid}`, {
+      signal: AbortSignal.timeout(15_000),
+    });
+    if (result.proposal_id !== oid)
+      throw new Error("A resposta não corresponde à proposta solicitada.");
+    return result;
+  }
   async function inspect(op: Operation) {
     await act(async () => {
-      setReview({
-        op,
-        files: await revisionFiles(pid, op.result_ref.revision_id!),
-      });
+      const proposal = await readProposal(op.id);
+      if (!mounted.current || currentScope.current !== pid) return;
+      setReview({ op, proposal });
       setMobile("code");
     });
   }
-  async function accept() {
-    if (!review || !project || dirty) return;
+  async function refreshReview() {
+    if (!review || proposalAction.current) return;
     await act(async () => {
-      await draft.flush();
-      await command(
-        `/projects/${pid}/proposals/${review.op.id}/apply`,
-        {},
-        "POST",
-        project.version,
-      );
-      const p = await api<Project>(`/projects/${pid}`);
-      setProject(p);
-      setBaseFiles(review.files);
-      draft.setData((d) => ({
-        ...d,
-        base_revision_id: p.current_revision_id,
-        files: null,
-      }));
-      await draft.flush();
+      const proposal = await readProposal(review.op.id);
+      if (!mounted.current || currentScope.current !== pid) return;
+      setReview({ op: review.op, proposal });
+      if (proposal.state === "applied") await syncApplied(proposal);
       tracking.refresh();
-      setReview(null);
-      setMessage("Alterações aplicadas à revisão salva.");
     });
+  }
+  async function compareCurrent() {
+    if (!review || proposalAction.current) return;
+    await act(async () => {
+      const current = await api<Project>(`/projects/${pid}`, {
+        signal: AbortSignal.timeout(15_000),
+      });
+      const incoming = await revisionFiles(pid, current.current_revision_id);
+      if (!mounted.current || currentScope.current !== pid) return;
+      setReview(null);
+      setRemote({ project: current, files: incoming });
+    });
+  }
+  async function syncApplied(proposal: Proposal) {
+    if (!proposal.applied_revision_id || proposal.state !== "applied")
+      throw new Error(
+        "A aplicação ainda não foi confirmada pelo servidor. Consulte o estado antes de repetir.",
+      );
+    const p = await api<Project>(`/projects/${pid}`, {
+      signal: AbortSignal.timeout(15_000),
+    });
+    const incoming = await revisionFiles(pid, p.current_revision_id);
+    await draft.reload();
+    if (!mounted.current || currentScope.current !== pid) return;
+    setProject(p);
+    setBaseFiles(incoming);
+    setSelected((path) =>
+      path in incoming ? path : (Object.keys(incoming)[0] ?? ""),
+    );
+    syncedOperations.current.add(proposal.proposal_id);
+    tracking.refresh();
+    setReview(null);
+    setMessage(
+      p.current_revision_id === proposal.applied_revision_id
+        ? "Alterações aplicadas à revisão salva."
+        : "Aplicação confirmada. A revisão mais recente do projeto foi carregada.",
+    );
+  }
+  async function proposalCommand<T>(
+    path: string,
+    body: unknown,
+    version?: number,
+  ): Promise<T> {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      return await Promise.race([
+        command<T>(path, body, "POST", version),
+        new Promise<never>((_, reject) => {
+          timer = setTimeout(
+            () =>
+              reject(
+                new Error(
+                  "A confirmação demorou. Consultando o resultado antes de permitir repetir.",
+                ),
+              ),
+            20_000,
+          );
+        }),
+      ]);
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+  async function accept() {
+    if (!review || !project || dirty || busy || proposalAction.current) return;
+    const selectedReview = review;
+    proposalAction.current = true;
+    setBusy(true);
+    setError(null);
+    setMessage("");
+    try {
+      await draft.flush();
+      const latest = await readProposal(selectedReview.op.id);
+      if (!mounted.current || currentScope.current !== pid) return;
+      if (latest.proposal_version !== selectedReview.proposal.proposal_version)
+        throw new Error(
+          "A versão da proposta mudou. Consulte e revise a versão atual antes de aplicar.",
+        );
+      if (latest.state === "applied") {
+        await syncApplied(latest);
+        return;
+      }
+      if (latest.state !== "generated") {
+        setReview({ ...selectedReview, proposal: latest });
+        throw new Error(
+          latest.state === "conflict"
+            ? "O projeto ou rascunho mudou. A proposta e suas edições foram preservadas."
+            : "Esta proposta já não está disponível para aplicação.",
+        );
+      }
+      await proposalCommand<{ revision_id: string }>(
+        `/projects/${pid}/proposals/${selectedReview.op.id}/apply`,
+        {
+          expected_proposal_version: selectedReview.proposal.proposal_version,
+          expected_project_revision:
+            selectedReview.proposal.base_project_revision,
+        },
+        selectedReview.proposal.expected_project_version,
+      );
+      const confirmed = await readProposal(selectedReview.op.id);
+      if (!mounted.current || currentScope.current !== pid) return;
+      setReview({ ...selectedReview, proposal: confirmed });
+      await syncApplied(confirmed);
+    } catch (failure) {
+      if (!mounted.current || currentScope.current !== pid) return;
+      try {
+        const confirmed = await readProposal(selectedReview.op.id);
+        if (!mounted.current || currentScope.current !== pid) return;
+        if (
+          confirmed.proposal_version ===
+          selectedReview.proposal.proposal_version
+        ) {
+          setReview({ ...selectedReview, proposal: confirmed });
+          if (confirmed.state === "applied") {
+            await syncApplied(confirmed);
+            return;
+          }
+        }
+      } catch {}
+      if (mounted.current && currentScope.current === pid)
+        setError(
+          failure instanceof TypeError
+            ? new Error(
+                "A conexão foi interrompida. A proposta foi preservada; consulte o estado antes de repetir.",
+              )
+            : failure,
+        );
+    } finally {
+      proposalAction.current = false;
+      if (mounted.current && currentScope.current === pid) setBusy(false);
+    }
+  }
+  async function discard() {
+    if (!review || busy || proposalAction.current) return;
+    const selectedReview = review;
+    proposalAction.current = true;
+    setBusy(true);
+    setError(null);
+    try {
+      await proposalCommand(
+        `/projects/${pid}/proposals/${selectedReview.op.id}/discard`,
+        {},
+      );
+      const confirmed = await readProposal(selectedReview.op.id);
+      if (confirmed.state !== "discarded")
+        throw new Error(
+          "O descarte ainda não foi confirmado. Consulte o estado da proposta.",
+        );
+      if (!mounted.current || currentScope.current !== pid) return;
+      setReview(null);
+      tracking.refresh();
+      setMessage("Proposta descartada. A revisão atual foi preservada.");
+    } catch (failure) {
+      if (!mounted.current || currentScope.current !== pid) return;
+      try {
+        const confirmed = await readProposal(selectedReview.op.id);
+        if (confirmed.state === "discarded") {
+          if (mounted.current && currentScope.current === pid) {
+            setReview(null);
+            tracking.refresh();
+            setMessage("Proposta descartada. A revisão atual foi preservada.");
+          }
+          return;
+        }
+      } catch {}
+      if (mounted.current && currentScope.current === pid) setError(failure);
+    } finally {
+      proposalAction.current = false;
+      if (mounted.current && currentScope.current === pid) setBusy(false);
+    }
   }
   async function exportProject() {
     if (!project) return;
@@ -387,9 +561,9 @@ export function ProjectWorkspace() {
             dirty={dirty}
             busy={busy}
             operations={tracking.items}
-            onAccepted={(op) => {
-              tracking.accept(op);
-              tracking.refresh();
+            beforeNavigate={async () => {
+              await draft.flush();
+              await buildFlush.current();
             }}
           />
         </div>
@@ -432,7 +606,7 @@ export function ProjectWorkspace() {
         {[
           ["code", "Código"],
           ["preview", "Prévia"],
-          ["chat", "Conversa"],
+          ["chat", "Construção"],
         ].map(([key, label]) => (
           <button
             key={key}
@@ -543,7 +717,7 @@ export function ProjectWorkspace() {
               <MessageSquare size={19} />
               Construir com IA
             </h2>
-            <span className="small muted">Conversa do projeto</span>
+            <span className="small muted">Pedido do projeto</span>
           </div>
           {!!tracking.error && (
             <div className="notice" role="alert">
@@ -554,6 +728,7 @@ export function ProjectWorkspace() {
             </div>
           )}
           <GuidedBuildPanel
+            key={pid}
             onFlushReady={(fn) => {
               buildFlush.current = fn;
             }}
@@ -574,22 +749,53 @@ export function ProjectWorkspace() {
             reuseRequest={reuseRequest}
             onReused={() => setReuseRequest(null)}
             replyTo={replyTo}
+            replyText={replyText}
+            replyFocusRequest={replyFocusRequest}
+            onNewRequest={() => setReplyTo(null)}
+            contextRevision={project.current_revision_id}
+            contextDirty={dirty}
+            onSaveContext={async () => {
+              await save();
+            }}
+            onRefreshContext={async () => {
+              await draft.flush();
+              const current = await api<Project>(`/projects/${pid}`);
+              const incoming = await revisionFiles(
+                pid,
+                current.current_revision_id,
+              );
+              if (!mounted.current || currentScope.current !== pid) return;
+              if (
+                dirty &&
+                current.current_revision_id !== draft.data!.base_revision_id
+              ) {
+                setRemote({ project: current, files: incoming });
+                throw new Error(
+                  "Há alterações locais e uma nova revisão salva. Compare as versões do projeto antes de atualizar a preparação.",
+                );
+              }
+              await draft.reload();
+              if (!mounted.current || currentScope.current !== pid) return;
+              setProject(current);
+              setBaseFiles(incoming);
+              setSelected((path) =>
+                path in incoming ? path : (Object.keys(incoming)[0] ?? ""),
+              );
+            }}
             beforeSend={async () => {
               setBusy(true);
               try {
-                const revision = dirty
-                  ? await save()
-                  : project.current_revision_id;
                 await draft.flush();
-                if (!revision)
-                  throw new Error("Salve a revisão antes de enviar.");
-                return revision;
+                return project.current_revision_id;
               } finally {
                 setBusy(false);
               }
             }}
             onAccepted={(op) => {
               setReplyTo(null);
+              setReplyText("");
+              setReplyFocusRequest(0);
+              setFollowRequest((request) => request + 1);
               tracking.accept(op);
               tracking.refresh();
             }}
@@ -600,6 +806,7 @@ export function ProjectWorkspace() {
               busy={busy}
               syncedAt={tracking.syncedAt}
               loadedRevision={project.current_revision_id}
+              followRequest={followRequest}
               onCancel={(op) =>
                 void act(async () => {
                   tracking.accept(
@@ -624,8 +831,10 @@ export function ProjectWorkspace() {
                 })
               }
               onAnswer={(op) => {
-                setReplyTo(op.id);
-                input.current?.focus();
+                setReplyTo(op.reply_to || op.id);
+                setReplyText(op.reply_to ? op.request_text || "" : "");
+                setReplyFocusRequest((request) => request + 1);
+                setMobile("chat");
               }}
             />
           </GuidedBuildPanel>
@@ -674,6 +883,9 @@ export function ProjectWorkspace() {
           dirty,
           busy,
           accept,
+          discard,
+          refreshReview,
+          compareCurrent,
           project,
           setProject,
           draft,

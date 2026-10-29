@@ -36,7 +36,7 @@ def system(tmp_path):
     Base.metadata.create_all(engine)
     with engine.begin() as connection:
         connection.execute(text("CREATE TABLE alembic_version (version_num VARCHAR(32) PRIMARY KEY)"))
-        connection.execute(text("INSERT INTO alembic_version VALUES ('0006')"))
+        connection.execute(text("INSERT INTO alembic_version VALUES ('0007')"))
     policy = {
         "provider": "openai",
         "model": "gpt-6-luna",

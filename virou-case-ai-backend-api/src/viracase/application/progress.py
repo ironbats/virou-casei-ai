@@ -1,6 +1,12 @@
 from viracase.domain.rules import utcnow
 
 STAGES = {
+    "preparation_filling": "Preparando sugestões para os campos selecionados.",
+    "preparation_repairing": "Conferindo novamente a resposta estruturada dos campos.",
+    "preparation_ready": "Sugestões prontas para revisão, sem aplicação automática.",
+    "preparation_needs_input": "Aguardando informações para completar os campos.",
+    "preparation_failed": "Não foi possível concluir a preparação dos campos.",
+    "preparation_cancelled": "Preparação cancelada. Os campos foram preservados.",
     "deletion_queued": "Exclusão solicitada. Aguardando o executor.",
     "deletion_remote": "Removendo a publicação e o banco do projeto.",
     "deletion_sources": "Removendo arquivos e rascunhos do projeto.",
@@ -66,7 +72,8 @@ ERRORS = {
     "PROVIDER_MODEL_UNAVAILABLE": "A integração de IA selecionada está indisponível. Solicite ao operador a revisão da configuração.",
     "PROVIDER_CAPACITY_EXCEEDED": "A integração de IA atingiu o limite de uso ou capacidade. Aguarde antes de tentar novamente; se persistir, contate o suporte.",
     "PROVIDER_REQUEST_TOO_LARGE": "O contexto ultrapassou o tamanho aceito pela integração. Seu código foi preservado. Reduza o contexto antes de tentar novamente.",
-    "GENERATION_LIMIT": "O pedido ultrapassou o limite de uma construção. Nenhuma alteração parcial foi aplicada. Divida o pedido em etapas menores.",
+    "CONTEXT_LIMIT_EXCEEDED": "O pedido e os arquivos excederam o limite de contexto disponível para esta construção. Nenhuma alteração parcial foi aplicada. Revise o tamanho do pedido e o limite de contexto do projeto antes de tentar novamente.",
+    "GENERATION_LIMIT": "A construção atingiu o limite de chamadas configurado antes de concluir o pedido. Nenhuma alteração parcial foi aplicada. Consulte os detalhes da falha e solicite a revisão do limite de geração.",
     "INVALID_GENERATION": "A resposta da IA não passou pela validação, mesmo após a tentativa de correção. Seu código foi preservado. Você pode tentar novamente.",
     "GENERATION_EDIT_MISMATCH": "A IA não conseguiu localizar com segurança os trechos a alterar. Seu código foi preservado. Tente novamente para reconstruir os arquivos afetados.",
     "DRAFT_NOT_SAVED": "Salve as alterações do rascunho antes de enviar o pedido.",

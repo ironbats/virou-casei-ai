@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { api, command } from "./api";
 import type { Connection } from "./integration-types";
 
@@ -8,13 +8,17 @@ export function Qualification({
   blocked,
   onBusy,
   onDirty,
+  standalone = false,
 }: {
   config: Connection;
   blocked: boolean;
   onBusy: (busy: boolean) => void;
   onDirty: (dirty: boolean) => void;
   reload: () => Promise<void>;
+  standalone?: boolean;
 }) {
+  const upload = useRef<HTMLInputElement>(null);
+  const Container = standalone ? "section" : "details";
   const [report, setReport] = useState(""),
     [error, setError] = useState(""),
     [busy, setBusy] = useState(false),
@@ -28,12 +32,19 @@ export function Qualification({
       .catch((e) => setError(e.message));
   }, []);
   return (
-    <details>
-      <summary>Relatório de qualificação da publicação</summary>
+    <Container
+      className={standalone ? "cloudflare-qualification form" : undefined}
+    >
+      {standalone ? (
+        <h3>Relatório de qualificação da publicação</h3>
+      ) : (
+        <summary>Relatório de qualificação da publicação</summary>
+      )}
       <p>
-        A verificação operacional acima pode liberar a publicação. Para qualificação formal adicional, anexe os resultados reais
-        dos testes de cada perfil, revise as evidências e registre o relatório
-        desta versão. Relatórios incompletos, vencidos ou com falhas não qualificam esta versão.
+        A verificação operacional pode liberar a publicação. Para qualificação
+        formal adicional, anexe os resultados reais dos testes de cada perfil,
+        revise as evidências e registre o relatório desta versão. Relatórios
+        incompletos, vencidos ou com falhas não qualificam esta versão.
       </p>
       <p className="small">
         Configuração: {config.id || "Salve primeiro"}
@@ -53,6 +64,7 @@ export function Qualification({
       <label>
         Carregar relatório JSON
         <input
+          ref={upload}
           disabled={busy || blocked}
           type="file"
           accept=".json,application/json"
@@ -93,37 +105,54 @@ export function Qualification({
           {error}
         </p>
       )}
-      <button
-        className="button"
-        disabled={
-          busy ||
-          blocked ||
-          !report ||
-          !["validated", "active"].includes(config.state)
-        }
-        onClick={async () => {
-          setBusy(true);
-          onBusy(true);
-          setError("");
-          try {
-            await command(
-              `/integration-connections/${config.connection_id}/qualification`,
-              JSON.parse(report),
-              "POST",
-              config.version,
-            );
-            await reload();
-            setReport("");
-          } catch (e) {
-            setError(e instanceof Error ? e.message : String(e));
-          } finally {
-            setBusy(false);
-            onBusy(false);
+      <div className="actions">
+        <button
+          className="button"
+          disabled={
+            busy ||
+            blocked ||
+            !report ||
+            !["validated", "active"].includes(config.state)
           }
-        }}
-      >
-        Registrar resultados e revisão responsável
-      </button>
-    </details>
+          onClick={async () => {
+            setBusy(true);
+            onBusy(true);
+            setError("");
+            try {
+              await command(
+                `/integration-connections/${config.connection_id}/qualification`,
+                JSON.parse(report),
+                "POST",
+                config.version,
+              );
+              await reload();
+              setReport("");
+              if (upload.current) upload.current.value = "";
+            } catch (e) {
+              setError(e instanceof Error ? e.message : String(e));
+            } finally {
+              setBusy(false);
+              onBusy(false);
+            }
+          }}
+        >
+          Registrar resultados e revisão responsável
+        </button>
+        {report && (
+          <button
+            type="button"
+            className="button"
+            disabled={busy || blocked}
+            onClick={() => {
+              setReport("");
+              setError("");
+              if (upload.current) upload.current.value = "";
+            }}
+          >
+            Limpar relatório
+          </button>
+        )}
+      </div>
+    </Container>
   );
 }

@@ -118,15 +118,25 @@ test("duas conexões Jev: cadastro, ativação, padrão, edição isolada, filtr
     .click();
   await expect(dialog).toHaveCount(0);
   await expect(page.getByRole("row", { name: /Jev equipe A/ })).toContainText(
-    "Rascunho",
+    "Ativa",
   );
   await expect(page.getByRole("row", { name: /Jev equipe B/ })).toContainText(
     "Ativa",
   );
+  expect(
+    (await (await page.request.get("/admin-api/v1/integrations/jev")).json())
+      .settings.max_objective_chars,
+  ).toBe(2200);
   await page
     .getByRole("combobox", { name: "Estado", exact: true })
     .selectOption("active");
+  await expect(page.getByRole("row", { name: /Jev equipe A/ })).toBeVisible();
+  await expect(page.getByRole("row", { name: /Jev equipe B/ })).toBeVisible();
+  await page
+    .getByRole("combobox", { name: "Estado", exact: true })
+    .selectOption("draft");
   await expect(page.getByRole("row", { name: /Jev equipe A/ })).toHaveCount(0);
+  await expect(page.getByRole("row", { name: /Jev equipe B/ })).toHaveCount(0);
   await page
     .getByRole("combobox", { name: "Estado", exact: true })
     .selectOption("");
@@ -146,6 +156,9 @@ test("duas conexões Jev: cadastro, ativação, padrão, edição isolada, filtr
     .click();
   await expect(page.getByRole("row", { name: /Jev equipe B/ })).toContainText(
     "Padrão",
+  );
+  await expect(page.getByRole("row", { name: /Jev equipe A/ })).toContainText(
+    "Ativa",
   );
   await page
     .getByRole("button", { name: "Editar Jev equipe A", exact: true })
@@ -259,9 +272,7 @@ test("duas contas Cloudflare e erro de edição preservam campos e segredo somen
   await page
     .getByRole("button", { name: "Gerenciar Cloudflare produção", exact: true })
     .click();
-  await dialog
-    .getByText("Relatório de qualificação da publicação", { exact: true })
-    .click();
+  await dialog.getByRole("tab", { name: "Qualificação", exact: true }).click();
   await expect(
     dialog.getByLabel("Carregar relatório JSON", { exact: true }),
   ).toBeVisible();

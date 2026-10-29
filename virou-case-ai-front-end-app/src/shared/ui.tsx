@@ -31,10 +31,16 @@ export function Modal({
   title,
   children,
   close,
+  closeDisabled = false,
+  describedBy,
+  className,
 }: {
   title: string;
   children: ReactNode;
   close: () => void;
+  closeDisabled?: boolean;
+  describedBy?: string;
+  className?: string;
 }) {
   const ref = useRef<HTMLDialogElement>(null);
   useEffect(() => {
@@ -45,15 +51,22 @@ export function Modal({
   return (
     <dialog
       ref={ref}
+      className={className}
       onCancel={(event) => {
         event.preventDefault();
-        close();
+        if (!closeDisabled) close();
       }}
       aria-label={title}
+      aria-describedby={describedBy}
     >
       <div className="dialog-head">
         <h2>{title}</h2>
-        <button className="icon-button" onClick={close} aria-label="Fechar">
+        <button
+          className="icon-button"
+          onClick={close}
+          disabled={closeDisabled}
+          aria-label="Fechar"
+        >
           <X size={22} />
         </button>
       </div>

@@ -6,7 +6,7 @@ from fastapi.testclient import TestClient
 from sqlalchemy import func, select
 
 from test_integrated_workspace import workspace as workspace
-from test_conversation_runtime import managed_provider, runtime, login, project_and_draft
+from test_conversation_runtime import fund_generation, managed_provider, runtime, login, project_and_draft
 from viracase.application.conversation_turn import InvalidTurn, parse_turn, turn_schema
 from viracase.application.generation import GenerationService
 from viracase.application.ports import ModelResult
@@ -15,6 +15,7 @@ from viracase.infrastructure.models import Attempt, Revision
 from viracase.infrastructure.providers import ProviderUncertain
 from viracase.infrastructure.worker import Worker
 from viracase.interfaces.api import create_app
+from workflow_http import reviewed_message
 
 
 def response(action="implement", complete=True, **overrides):
@@ -84,7 +85,7 @@ class Gateway:
         if self.mode == "uncertain":
             raise ProviderUncertain("synthetic-only")
         if self.mode == "cost":
-            usage["output"] = 100000
+            usage["output"] = policy["max_output_tokens"] * policy["max_batches"] * 2
         if self.mode == "invalid" or (self.mode == "repair" and count == 1):
             return ModelResult('{"files":', usage, "synthetic")
         if self.mode == "truncated" and count == 1:
@@ -112,6 +113,7 @@ class Gateway:
 
 
 def configure(system):
+    fund_generation(system)
     policy = {
         **system["policy"],
         "input_usd_per_million": "0",
@@ -277,18 +279,9 @@ def test_question_is_not_a_failed_generation_and_short_answer_keeps_context(syst
         create_app(dependencies=(system["config"], system["engine"], repo, system["catalog"], gateway))
     ) as client:
         headers = login(client, system)
-        result = client.post(
-            f"/api/v1/projects/{project['id']}/conversation",
-            headers={**headers, "Idempotency-Key": "answer"},
-            json={
-                "brief": "sim",
-                "base_revision_id": project["current_revision_id"],
-                "policy_version": "2026-10-v1",
-                "auto_apply": True,
-                "reply_to": question["id"],
-            },
-        )
+        result = reviewed_message(client, headers, project, "answer", "sim", question["id"])
         assert result.status_code == 202, result.text
+        assert Worker(repo, gateway, system["catalog"]).tick(result.json()["id"])
         operation = client.get("/api/v1/operations/" + result.json()["id"]).json()
         assert operation["state"] == "succeeded", operation
     assert question["result_ref"]["message"] in gateway.prompts[-1]
@@ -329,20 +322,18 @@ def test_managed_provider_runs_new_contract_from_authenticated_api(system, monke
     with TestClient(create_app(dependencies=dependencies)) as client:
         headers = login(client, system)
         project = project_and_draft(client, headers)
-        result = client.post(
-            f"/api/v1/projects/{project['id']}/conversation",
-            headers={**headers, "Idempotency-Key": "auto"},
-            json={
-                "brief": "Melhore a apresentação da homepage",
-                "base_revision_id": project["current_revision_id"],
-                "policy_version": "2026-10-v1",
-                "auto_apply": True,
-            },
-        )
+        result = reviewed_message(client, headers, project, "reviewed", "Melhore a apresentação da homepage")
         assert result.status_code == 202, result.text
+        assert Worker(dependencies[2], dependencies[4], dependencies[3]).tick(result.json()["id"])
         operation = client.get("/api/v1/operations/" + result.json()["id"]).json()
         assert operation["state"] == "succeeded", operation
-        assert operation["result_ref"]["applied_revision_id"]
+        assert operation["result_ref"]["candidate"] and "applied_revision_id" not in operation["result_ref"]
+        applied = client.post(
+            f"/api/v1/projects/{project['id']}/proposals/{operation['id']}/apply",
+            headers={**headers, "Idempotency-Key": "apply-reviewed", "If-Match": str(project["version"])},
+        )
+        assert applied.status_code == 200, applied.text
+        assert applied.json()["revision_id"]
         body = json.loads(calls[-1].content)
         schema = (
             body["text"]["format"]["schema"]

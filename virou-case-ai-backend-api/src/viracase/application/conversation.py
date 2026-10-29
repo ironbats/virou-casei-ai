@@ -1,10 +1,88 @@
 """Bounded, atomic code generation using complete batches and exact text edits."""
 
 import json
+
 from viracase.domain.rules import RuleError
 
 MAX_BATCHES = 4
+MAX_GENERATION_CALLS = 10
 INPUT_BOUND = 64096
+INPUT_OVERHEAD = 4096
+GENERATION_INPUT_BUDGET = INPUT_BOUND * MAX_BATCHES
+MAX_GENERATION_CONTEXT_BYTES = GENERATION_INPUT_BUDGET - INPUT_OVERHEAD
+
+
+def generation_call_limit(policy):
+    limit = policy.get("max_batches", MAX_BATCHES)
+    if type(limit) is not int or not 1 <= limit <= MAX_GENERATION_CALLS:
+        raise RuleError("INVALID_GENERATION_POLICY", "Limite de chamadas de geração inválido.", 400)
+    return limit
+
+
+def generation_recovery_policy(policy):
+    return {
+        "max_truncation_retries": policy.get("max_truncation_retries", 1),
+        "max_response_repairs": policy.get("max_response_repairs", 2),
+        "max_batch_characters": policy.get("max_batch_characters", 24000),
+        "minimum_batch_characters": policy.get("minimum_batch_characters", 500),
+        "batch_shrink_factor": policy.get("batch_shrink_factor", 0.5),
+    }
+
+
+def generation_batch_budget(policy, truncation_retries=0, input_bound=INPUT_BOUND):
+    output = policy["max_output_tokens"]
+    if policy.get("generation_runtime_version") != 1:
+        return max(500, min(24000, output * (1 if truncation_retries else 2)))
+    recovery = generation_recovery_policy(policy)
+    ceiling = min(recovery["max_batch_characters"], output * 2, max(0, input_bound - INPUT_OVERHEAD))
+    minimum = min(recovery["minimum_batch_characters"], ceiling)
+    return max(minimum, int(ceiling * recovery["batch_shrink_factor"] ** truncation_retries))
+
+
+def context_input_budget(policy):
+    calls = generation_call_limit(policy)
+    reserved = policy.get("reserved_input_bound", INPUT_BOUND) * calls
+    return min(policy.get("generation_input_budget", reserved), reserved, INPUT_BOUND * calls)
+
+
+def context_input_bound(policy, payload, input_tokens=0):
+    if policy.get("generation_context_version") != 2:
+        return min(INPUT_BOUND, policy.get("reserved_input_bound", INPUT_BOUND))
+    context_limit = min(
+        payload.get("generation_context_limit_bytes", MAX_GENERATION_CONTEXT_BYTES),
+        MAX_GENERATION_CONTEXT_BYTES,
+    )
+    return max(0, min(context_limit + INPUT_OVERHEAD, context_input_budget(policy) - input_tokens))
+
+
+def context_prompt(instruction, context, input_bound=INPUT_BOUND, request_limit_bytes=None):
+    prompt = instruction + json.dumps(context, ensure_ascii=False)
+    context_bytes = len(prompt.encode())
+    if request_limit_bytes is not None:
+        request_bytes = len(
+            (instruction + json.dumps({**context, "files": {}}, ensure_ascii=False)).encode()
+        )
+        if request_bytes > request_limit_bytes:
+            raise RuleError(
+                "CONTEXT_LIMIT_EXCEEDED",
+                "Pedido, anexos e histórico excedem o limite configurado. Seu código foi preservado.",
+                400,
+                {
+                    "reason_code": "REQUEST_CONTEXT_LIMIT",
+                    "context_bytes": context_bytes,
+                    "request_context_bytes": request_bytes,
+                    "request_context_limit_bytes": request_limit_bytes,
+                    "reserved_input_bound": input_bound,
+                },
+            )
+    if context_bytes + INPUT_OVERHEAD > input_bound:
+        raise RuleError(
+            "CONTEXT_LIMIT_EXCEEDED",
+            "O contexto excede o limite de geração. Seu código foi preservado.",
+            400,
+            {"context_bytes": context_bytes, "reserved_input_bound": input_bound},
+        )
+    return prompt
 
 
 def response_schema():
@@ -28,8 +106,21 @@ def response_schema():
     }
 
 
-def prompt_for(project, brief, files, batch=0, smaller=False, output_tokens=16000):
-    character_budget = max(500, min(24000, output_tokens * (1 if smaller else 2)))
+def prompt_for(
+    project,
+    brief,
+    files,
+    batch=0,
+    smaller=False,
+    output_tokens=16000,
+    *,
+    input_bound=INPUT_BOUND,
+    request_limit_bytes=None,
+    max_batches=MAX_BATCHES,
+    character_budget=None,
+):
+    if character_budget is None:
+        character_budget = max(500, min(24000, output_tokens * (1 if smaller else 2)))
     instruction = (
         'Implemente o pedido na stack indicada. Responda JSON válido: {"files":[{"path":"caminho",'
         '"content":"conteúdo integral"}],"edits":[{"path":"caminho","old":"trecho exato único",'
@@ -47,22 +138,19 @@ def prompt_for(project, brief, files, batch=0, smaller=False, output_tokens=1600
     )
     if smaller:
         instruction += "O lote anterior foi cortado e descartado. Priorize uma alteração pequena e completa neste lote.\n"
-    prompt = instruction + json.dumps(
+    return context_prompt(
+        instruction,
         {
             "stack": project["stack"],
             "objective": project["objective"],
             "request": brief,
             "batch": batch + 1,
-            "batches_remaining": MAX_BATCHES - batch,
+            "batches_remaining": max_batches - batch,
             "files": files,
         },
-        ensure_ascii=False,
+        input_bound,
+        request_limit_bytes,
     )
-    if len(prompt.encode()) + 4096 > INPUT_BOUND:
-        raise RuleError(
-            "CONTEXT_LIMIT_EXCEEDED", "O contexto excede o limite de geração. A revisão foi preservada.", 400
-        )
-    return prompt
 
 
 def apply_batch(text, existing):

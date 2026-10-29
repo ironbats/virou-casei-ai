@@ -116,7 +116,7 @@ def test_upgrade_preserves_all_legacy_rows_ciphertexts_and_publication_bindings(
         }
         assert db.execute("PRAGMA foreign_key_check").fetchall() == []
     with sessions() as db:
-        assert db.scalar(text("SELECT version_num FROM alembic_version")) == "0006"
+        assert db.scalar(text("SELECT version_num FROM alembic_version")) == "0007"
         connections = db.scalars(select(IntegrationConnection)).all()
         assert len(connections) == 2
         assert {c.default_for for c in connections} == {"cloudflare", "jev"}

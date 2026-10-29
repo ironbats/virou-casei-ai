@@ -16,6 +16,7 @@ export class ApiError extends Error {
     message: string,
     public status: number,
     public requestId = "",
+    public details?: unknown,
   ) {
     super(message);
   }
@@ -42,6 +43,7 @@ export async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
         "Não foi possível concluir. Tente consultar novamente.",
       response.status,
       body.error?.request_id,
+      body.error?.details,
     );
   }
   return response.status === 204

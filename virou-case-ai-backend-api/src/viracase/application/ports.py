@@ -1,4 +1,4 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Protocol
 
 
@@ -8,6 +8,7 @@ class ModelResult:
     usage: dict
     external_id: str | None
     output_error: str | None = None
+    diagnostics: dict = field(default_factory=dict)
 
 
 class ModelGateway(Protocol):

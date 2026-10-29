@@ -1,10 +1,17 @@
 from sqlalchemy import select
 
+from viracase.application.conversation import (
+    context_input_bound,
+    generation_batch_budget,
+    generation_call_limit,
+)
 from viracase.application.conversation_turn import turn_prompt
 from viracase.domain.rules import RuleError
+from viracase.infrastructure.clarifications import continuation_context, continuation_files
 from viracase.infrastructure.drafts import Drafts
 from viracase.infrastructure.guided_build import attachment_context
 from viracase.infrastructure.models import Operation
+from viracase.infrastructure.workflow_logging import emit as emit_workflow
 
 
 def prepare_turn(repo, db, operation, project):
@@ -22,41 +29,70 @@ def prepare_turn(repo, db, operation, project):
         raise RuleError("DRAFT_NOT_SAVED", "Salve as alterações do rascunho antes de enviar o pedido.", 409)
     reply = operation.payload.get("reply_to")
     if reply:
-        previous = db.get(Operation, reply)
+        context = continuation_context(db, operation.account_id, project, operation.payload)
+        operation.payload = {**operation.payload, **context, "project_version": project.version}
+        files, _ = continuation_files(operation.payload, files, repo.sources.secrets)
+        context = operation.payload["history"]
+    else:
+        context = recent_history(db, operation.account_id, project.id)
+        operation.payload = {**operation.payload, "history": context, "project_version": project.version}
+    try:
+        prompt = turn_prompt(
+            project_dto(project),
+            attachment_context(operation.payload),
+            files,
+            history=context,
+            output_tokens=operation.policy["max_output_tokens"],
+            input_bound=context_input_bound(operation.policy, operation.payload),
+            max_batches=generation_call_limit(operation.policy),
+            character_budget=generation_batch_budget(
+                operation.policy, input_bound=context_input_bound(operation.policy, operation.payload)
+            ),
+            request_limit_bytes=operation.payload.get("context_limit_bytes", 60000)
+            if operation.policy.get("generation_context_version") == 2
+            else None,
+        )
         if (
-            not previous
-            or previous.account_id != operation.account_id
-            or previous.project_id != project.id
-            or previous.type != "generation"
-            or previous.state != "succeeded"
-            or previous.result.get("kind") != "clarification"
+            operation.policy.get("generation_context_version") != 2
+            and len(prompt.encode()) > operation.payload.get("context_limit_bytes", 60000)
         ):
-            raise RuleError("NOT_FOUND", "Pergunta indisponível nesta conversa.", 404)
-        if previous.payload.get("base_revision_id") != base:
             raise RuleError(
-                "CONTEXT_CHANGED", "O projeto mudou depois da pergunta. Envie um novo pedido.", 409
+                "CONTEXT_LIMIT_EXCEEDED",
+                "Mensagem, anexos, histórico e arquivos excedem o limite configurado. Reduza o conteúdo antes de enviar.",
+                400,
+                {"context_bytes": len(prompt.encode())},
             )
+    except RuleError as exc:
+        emit_workflow(
+            "generation_context_rejected",
+            "error",
+            operation=operation,
+            error=exc,
+            secrets=repo.sources.secrets,
+            phase="admission",
+            state="rejected",
+            transaction_state="not_reserved",
+            **exc.details,
+        )
+        raise
+
+
+def recent_history(db, actor, pid):
     history = db.scalars(
         select(Operation)
         .where(
-            Operation.account_id == operation.account_id,
-            Operation.project_id == project.id,
+            Operation.account_id == actor,
+            Operation.project_id == pid,
             Operation.type == "generation",
             Operation.state.in_(["succeeded", "failed", "cancelled"]),
         )
         .order_by(Operation.created_at.desc(), Operation.id.desc())
         .limit(4)
     ).all()
-    if reply and all(item.id != reply for item in history):
-        history = [*history[:3], previous]
-    context = [
+    return [
         {
-            "request": (
-                item.payload.get("brief", "") if item.id == reply else item.payload.get("brief", "")[:3000]
-            ),
-            "response": (
-                item.result.get("message", "") if item.id == reply else item.result.get("message", "")[:2000]
-            ),
+            "request": item.payload.get("brief", "")[:3000],
+            "response": item.result.get("message", "")[:2000],
             "outcome": item.result.get("kind") or item.state,
             "applied": bool(
                 item.result.get("applied_revision_id")
@@ -65,20 +101,6 @@ def prepare_turn(repo, db, operation, project):
         }
         for item in reversed(history)
     ]
-    operation.payload = {**operation.payload, "history": context, "project_version": project.version}
-    prompt = turn_prompt(
-        project_dto(project),
-        attachment_context(operation.payload),
-        files,
-        history=context,
-        output_tokens=operation.policy["max_output_tokens"],
-    )
-    if len(prompt.encode()) > operation.payload.get("context_limit_bytes", 60000):
-        raise RuleError(
-            "CONTEXT_LIMIT_EXCEEDED",
-            "Mensagem, anexos, histórico e arquivos excedem o limite configurado. Reduza o conteúdo antes de enviar.",
-            400,
-        )
 
 
 def save_turn(repo, db, operation, project, files, original, changed, message):

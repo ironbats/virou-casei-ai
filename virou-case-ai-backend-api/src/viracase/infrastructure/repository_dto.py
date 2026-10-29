@@ -41,8 +41,9 @@ def operation_dto(o, admin=False):
         "billing_status": o.billing_status,
         "pending_reconciliation": o.billing_status == "reconciliation_pending" or o.state == "reconciling",
         "cancel_requested": o.cancel_requested,
-        "result_ref": {k: v for k, v in o.result.items() if k != "activity"},
+        "result_ref": {"preparation_state": o.result.get("preparation", {}).get("state"), "attachment_count": len(o.payload.get("items", []))} if o.type == "template_preparation" else {k: v for k, v in o.result.items() if k != "activity"},
         "request_text": o.payload.get("brief") if o.type == "generation" else None,
+        "reply_to": o.payload.get("reply_to") if o.type == "generation" else None,
         "attachment_snapshots": o.payload.get("attachment_snapshots", []),
         "progress_message": progress_message(o),
         "activity": [
