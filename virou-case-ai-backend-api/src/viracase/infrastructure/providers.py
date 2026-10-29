@@ -4,6 +4,7 @@ from decimal import Decimal
 
 import httpx
 
+from viracase.application.code_analysis import analysis_schema
 from viracase.application.conversation import response_schema
 from viracase.application.conversation_turn import turn_schema
 from viracase.application.ports import ModelResult
@@ -142,17 +143,20 @@ class HttpModelGateway:
             for option in ("temperature", "top_p"):
                 if execution.get(option) is not None:
                     body[option] = execution[option]
-            if policy.get("generation_contract_version") in {3, 4} or policy.get("template_preparation_contract"):
+            if policy.get("generation_contract_version") in {3, 4} or policy.get("template_preparation_contract") or policy.get("code_analysis_contract"):
                 body["text"]["format"] = {
                     "type": "json_schema",
-                    "name": "template_fields" if policy.get("template_preparation_contract") else "project_changes",
+                    "name": "code_analysis" if policy.get("code_analysis_contract") else "template_fields" if policy.get("template_preparation_contract") else "project_changes",
                     "strict": True,
-                    "schema": preparation_schema(
+                    "schema": analysis_schema() if policy.get("code_analysis_contract") else preparation_schema(
                         policy["template_preparation_contract"],
                         policy.get("preparation_source_refs"),
                         policy.get("preparation_selection_schema"),
                         policy.get("preparation_proposal_schema"),
-                    ) if policy.get("template_preparation_contract") else turn_schema()
+                    ) if policy.get("template_preparation_contract") else turn_schema(
+                        allow_deletions=bool(policy.get("generation_allow_deletions")),
+                        full_files=bool(policy.get("generation_full_files")),
+                    )
                     if policy.get("generation_contract_version") == 4
                     else response_schema(),
                 }
@@ -188,7 +192,7 @@ class HttpModelGateway:
             for option, wire_name in (("temperature", "temperature"), ("top_p", "topP")):
                 if execution.get(option) is not None:
                     body["generationConfig"][wire_name] = execution[option]
-            if policy.get("generation_contract_version") in {3, 4} or policy.get("template_preparation_contract"):
+            if policy.get("generation_contract_version") in {3, 4} or policy.get("template_preparation_contract") or policy.get("code_analysis_contract"):
 
                 def gemini_schema(value):
                     if isinstance(value, dict):
@@ -197,7 +201,7 @@ class HttpModelGateway:
                             for k, v in value.items()
                             if k != "additionalProperties"
                         }
-                        if policy.get("generation_contract_version") == 4 and value.get("type") == "object":
+                        if (policy.get("generation_contract_version") == 4 or policy.get("code_analysis_contract")) and value.get("type") == "object":
                             converted["propertyOrdering"] = list(value["properties"])
                         return converted
                     if isinstance(value, list):
@@ -205,12 +209,15 @@ class HttpModelGateway:
                     return value
 
                 body["generationConfig"]["responseSchema"] = gemini_schema(
-                    preparation_schema(
+                    analysis_schema() if policy.get("code_analysis_contract") else preparation_schema(
                         policy["template_preparation_contract"],
                         policy.get("preparation_source_refs"),
                         policy.get("preparation_selection_schema"),
                         policy.get("preparation_proposal_schema"),
-                    ) if policy.get("template_preparation_contract") else turn_schema() if policy.get("generation_contract_version") == 4 else response_schema()
+                    ) if policy.get("template_preparation_contract") else turn_schema(
+                        allow_deletions=bool(policy.get("generation_allow_deletions")),
+                        full_files=bool(policy.get("generation_full_files")),
+                    ) if policy.get("generation_contract_version") == 4 else response_schema()
                 )
         try:
             with httpx.Client(

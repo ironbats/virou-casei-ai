@@ -9,7 +9,7 @@ from sqlalchemy import func, select
 from viracase.domain.rules import RuleError
 from viracase.infrastructure.drafts import Drafts
 from viracase.infrastructure.learning import LearningLibrary
-from viracase.infrastructure.models import Operation, Revision, new_id
+from viracase.infrastructure.models import Draft, Operation, Revision, new_id
 from viracase.infrastructure.proposal_review import ProposalReviews
 from viracase.interfaces.api import create_app
 
@@ -114,6 +114,64 @@ def test_explicit_apply_is_atomic_idempotent_and_preserves_next_prompt(proposal)
             db.scalar(select(func.count()).select_from(Revision).where(Revision.project_id == project["id"]))
             == 3
         )
+
+
+@pytest.mark.parametrize("evidence_state", ["missing", "incompatible", "compatible"])
+def test_apply_persists_reusable_server_migration_evidence_atomically(proposal, monkeypatch, evidence_state):
+    from viracase.infrastructure import publication_migration_validation
+
+    repo, actor, project, drafts, oid, _, changed = proposal
+    review = ProposalReviews(repo).get(actor, project["id"], oid)
+    revision_id = review["candidate_revision_id"]
+    query = select(Draft).where(
+        Draft.account_id == actor, Draft.kind == "migration_plan", Draft.target == revision_id
+    )
+    with repo.sessions.begin() as db:
+        row = db.scalar(query)
+        if evidence_state == "missing":
+            db.delete(row)
+        elif evidence_state == "incompatible":
+            row.data = {
+                **row.data,
+                "migration_validation": {
+                    **row.data["migration_validation"], "policy_version": "obsolete-policy"
+                },
+            }
+
+    def stored_evidence():
+        with repo.sessions() as db:
+            rows = list(db.scalars(query))
+            assert len(rows) <= 1
+            return (rows[0].id, rows[0].version, rows[0].data) if rows else None
+
+    previous = stored_evidence()
+    with pytest.raises(RuleError) as caught:
+        drafts.apply(actor, project["id"], oid, "wrong-project-version", project["version"] + 1, guards(review))
+    assert caught.value.code == "VERSION_CONFLICT"
+    assert stored_evidence() == previous
+    assert repo.project(actor, project["id"])["current_revision_id"] == project["current_revision_id"]
+
+    applied = drafts.apply(actor, project["id"], oid, "apply-evidence", project["version"], guards(review))
+    assert applied == {"revision_id": revision_id}
+    current = stored_evidence()
+    assert current is not None
+    evidence = current[2]["migration_validation"]
+    assert evidence["revision_id"] == revision_id and evidence["passed"] is True
+    assert evidence["policy_version"] == publication_migration_validation.POLICY_VERSION
+    assert current[1] == (2 if evidence_state == "incompatible" else 1)
+    if evidence_state == "compatible":
+        assert current == previous
+
+    def unexpected_validation(*args, **kwargs):
+        raise AssertionError("A publicação deve reutilizar a evidência persistida na aplicação.")
+
+    monkeypatch.setattr(publication_migration_validation, "_validate_cached", unexpected_validation)
+    reused = publication_migration_validation.validate_migration_plan(
+        changed, revision_id=revision_id, previous_evidence=evidence
+    )
+    assert reused == evidence
+    assert drafts.apply(actor, project["id"], oid, "apply-evidence-again", project["version"], guards(review)) == applied
+    assert stored_evidence() == current
 
 
 @pytest.mark.parametrize("target", ["read", "file", "apply"])

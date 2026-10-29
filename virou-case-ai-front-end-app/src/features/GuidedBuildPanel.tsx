@@ -25,6 +25,7 @@ import {
   uncertainRetry,
 } from "./TemplateFillRetryDialog";
 import { GuidedTemplateCard } from "./GuidedTemplateCard";
+import { WorkspaceMenu } from "./WorkspaceMenu";
 import { GuidedSteps } from "./GuidedSteps";
 import { BuildAttachments } from "./BuildAttachments";
 import { BuildReplyComposer } from "./BuildReplyComposer";
@@ -88,6 +89,9 @@ export function GuidedBuildPanel({
   contextDirty,
   onSaveContext,
   onRefreshContext,
+  conversationRequest = 0,
+  newRequestRequest = 0,
+  onConversationReady,
 }: {
   pid: string;
   caps: Capabilities;
@@ -110,6 +114,9 @@ export function GuidedBuildPanel({
   contextDirty: boolean;
   onSaveContext: () => Promise<void>;
   onRefreshContext: () => Promise<void>;
+  conversationRequest?: number;
+  newRequestRequest?: number;
+  onConversationReady?: () => void;
 }) {
   const policy = caps.guided_build;
   const knownVersions = useRef<Record<string, Template>>({});
@@ -160,6 +167,11 @@ export function GuidedBuildPanel({
   const focusStage = useRef(false);
   const requestStarted = useRef(false);
   const handledReplyFocus = useRef(replyFocusRequest);
+  const handledConversationRequest = useRef(0);
+  const readyConversationRequest = useRef(0);
+  const handledNewRequest = useRef(0);
+  const conversationReady = useRef(onConversationReady);
+  conversationReady.current = onConversationReady;
   const heading = useRef<HTMLHeadingElement>(null);
   const messageInput = useRef<HTMLTextAreaElement>(null);
   current.current = draft.data;
@@ -333,8 +345,55 @@ export function GuidedBuildPanel({
     onFlushReady(draft.flush);
   }, [draft.flush]);
   useEffect(() => {
+    if (
+      !draft.data ||
+      !conversationRequest ||
+      handledConversationRequest.current === conversationRequest
+    )
+      return;
+    handledConversationRequest.current = conversationRequest;
+    setConversationRequested(true);
+    setShowHistory(true);
+  }, [conversationRequest, !!draft.data]);
+  useEffect(() => {
+    if (
+      !draft.data ||
+      !conversationMode ||
+      !conversationRequest ||
+      readyConversationRequest.current === conversationRequest
+    )
+      return;
+    const frame = requestAnimationFrame(() => {
+      readyConversationRequest.current = conversationRequest;
+      conversationReady.current?.();
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [conversationRequest, conversationMode, !!draft.data]);
+  useEffect(() => {
+    if (
+      !draft.data ||
+      !newRequestRequest ||
+      handledNewRequest.current === newRequestRequest
+    )
+      return;
+    handledNewRequest.current = newRequestRequest;
+    if (busy || blocked || !canWrite || draft.conflict || replyBusy) return;
+    if (stage === "conversation") void startNewRequest();
+    else {
+      setConversationRequested(false);
+      onNewRequest();
+      requestAnimationFrame(() => {
+        if (stage === "idea")
+          messageInput.current?.focus({ preventScroll: true });
+        else heading.current?.focus({ preventScroll: true });
+      });
+    }
+  }, [newRequestRequest, !!draft.data]);
+  useEffect(() => {
     if (focusStage.current) {
-      heading.current?.focus();
+      if (stage === "idea")
+        messageInput.current?.focus({ preventScroll: true });
+      else heading.current?.focus({ preventScroll: true });
       focusStage.current = false;
     }
   }, [stage]);
@@ -765,32 +824,42 @@ export function GuidedBuildPanel({
   }
   return (
     <div
-      className={`guided-build${conversationMode ? " is-conversation" : ""}`}
+      className={`guided-build${conversationMode ? " is-conversation" : stageNumber === 1 ? " is-idea" : ""}`}
     >
+      <div className="workspace-construction-steps">
+        <GuidedSteps
+          stageNumber={
+            conversationMode
+              ? stage === "conversation"
+                ? 4
+                : stage === "review"
+                  ? 3
+                  : stage === "templates"
+                    ? 2
+                    : 1
+              : stageNumber
+          }
+          disabled={disabled || conversationMode}
+          onBack={(next) => void goBack(next)}
+        />
+      </div>
       <div
         className={`guided-body${conversationMode ? " guided-conversation-body" : ""}`}
       >
         {!conversationMode && (
-          <h3 ref={heading} tabIndex={-1} className="guided-stage-title">
+          <h3
+            ref={heading}
+            tabIndex={-1}
+            className={
+              "guided-stage-title" + (stageNumber === 1 ? " sr-only" : "")
+            }
+          >
             {stageNumber === 1
               ? "Toda melhoria começa por uma ideia"
               : stageNumber === 2
                 ? "Templates para este pedido"
                 : "Revise antes de construir"}
           </h3>
-        )}
-        {stageNumber === 1 && (
-          <p className="muted">
-            Descreva o que você quer. Vamos recomendar templates e preenchê-los
-            com o contexto do seu projeto.
-          </p>
-        )}
-        {!conversationMode && (
-          <GuidedSteps
-            stageNumber={stageNumber}
-            disabled={disabled}
-            onBack={(next) => void goBack(next)}
-          />
         )}
         {!!errorDisplay && (
           <div id="build-workflow-error" tabIndex={-1}>
@@ -839,52 +908,6 @@ export function GuidedBuildPanel({
         )}
         {stageNumber === 1 && (
           <>
-            <label className="guided-label" htmlFor="build-idea">
-              O que vamos fazer?
-            </label>
-            <textarea
-              id="build-idea"
-              ref={messageInput}
-              value={d.message_text}
-              aria-invalid={
-                d.message_text.length >
-                Math.min(policy.max_objective_chars, policy.max_message_chars)
-              }
-              rows={6}
-              disabled={!canWrite || !!busy}
-              placeholder="Adicionar um botão Entrar na home que abre um modal de login, preservando o fluxo atual."
-              onChange={(event) => {
-                const text = event.target.value;
-                changeDraft((old) => ({
-                  ...old,
-                  stage: "idea",
-                  objective: text,
-                  message_text: text,
-                  templates_completed: false,
-                  can_build: false,
-                  review_snapshot: null,
-                }));
-              }}
-            />
-            <p className="guided-counter">
-              {d.message_text.length}/
-              {Math.min(policy.max_objective_chars, policy.max_message_chars)}
-            </p>
-            <details className="guided-context">
-              <summary>
-                <Folder size={18} aria-hidden="true" />
-                Contexto:{" "}
-                {contextRevision
-                  ? "revisão salva do projeto"
-                  : "projeto inicial vazio"}
-                <Info size={16} aria-hidden="true" />
-              </summary>
-              <p className="small">
-                {contextRevision
-                  ? `Revisão ${contextRevision}. A preparação fixa esta versão do projeto.`
-                  : "Este projeto ainda não possui uma revisão salva. O contexto inicial será vazio."}
-              </p>
-            </details>
             {contextDirty && (
               <div className="notice">
                 <p>
@@ -900,25 +923,6 @@ export function GuidedBuildPanel({
                 </button>
               </div>
             )}
-            <div
-              className="guided-explanation"
-              aria-label="Como a preparação funciona"
-            >
-              <span>
-                <FileText size={22} aria-hidden="true" />
-                Seu pedido
-              </span>
-              <ArrowRight size={18} aria-hidden="true" />
-              <span>
-                <Sparkles size={22} aria-hidden="true" />
-                Jev recomenda templates
-              </span>
-              <ArrowRight size={18} aria-hidden="true" />
-              <span>
-                <FileText size={22} aria-hidden="true" />A IA preenche com seu
-                contexto
-              </span>
-            </div>
           </>
         )}
         {stageNumber === 2 && (
@@ -1119,7 +1123,7 @@ export function GuidedBuildPanel({
             )}
           </>
         )}
-        {conversationMode
+        {conversationMode || stageNumber === 1
           ? children
           : hasHistory && (
               <details
@@ -1136,6 +1140,71 @@ export function GuidedBuildPanel({
             )}
       </div>
       <footer className="guided-footer">
+        {stageNumber === 1 && (
+          <div className="workspace-idea-composer">
+            <label className="guided-label" htmlFor="build-idea">
+              O que vamos fazer?
+            </label>
+            <textarea
+              id="build-idea"
+              ref={messageInput}
+              value={d.message_text}
+              aria-invalid={
+                d.message_text.length >
+                Math.min(policy.max_objective_chars, policy.max_message_chars)
+              }
+              rows={6}
+              disabled={!canWrite || !!busy}
+              placeholder="Descreva o próximo ajuste no projeto."
+              onChange={(event) => {
+                const text = event.target.value;
+                changeDraft((old) => ({
+                  ...old,
+                  stage: "idea",
+                  objective: text,
+                  message_text: text,
+                  templates_completed: false,
+                  can_build: false,
+                  review_snapshot: null,
+                }));
+              }}
+            />
+            <p className="guided-counter">
+              {d.message_text.length}/
+              {Math.min(policy.max_objective_chars, policy.max_message_chars)}
+            </p>
+          </div>
+        )}
+        {stageNumber === 1 && (
+          <div className="workspace-composer-context">
+            <WorkspaceMenu
+              label="Contexto e uso do pedido"
+              icon={<Folder size={18} aria-hidden="true" />}
+            >
+              <details className="guided-context">
+                <summary>
+                  <Folder size={18} aria-hidden="true" />
+                  Contexto:{" "}
+                  {contextRevision
+                    ? "revisão salva do projeto"
+                    : "projeto inicial vazio"}
+                  <Info size={16} aria-hidden="true" />
+                </summary>
+                <p className="small">
+                  {contextRevision
+                    ? `Revisão ${contextRevision}. A preparação fixa esta versão do projeto.`
+                    : "Este projeto ainda não possui uma revisão salva. O contexto inicial será vazio."}
+                </p>
+              </details>
+              <p className="small">
+                Jev recomenda templates. Selecionar autoriza o preenchimento
+                automático e consome seu uso de IA. Você revisa antes de gerar
+                código.
+              </p>
+            </WorkspaceMenu>
+          </div>
+        )}
+
         {conversationMode && (
           <>
             {replyTo ? (
@@ -1191,19 +1260,6 @@ export function GuidedBuildPanel({
               Nova construção
             </button>
           </>
-        )}
-        {stageNumber === 1 && (
-          <div className="guided-consumption">
-            <Sparkles size={22} aria-hidden="true" />
-            <p>
-              <strong>
-                Jev recomenda templates. A IA preenche com seu contexto.
-              </strong>
-              <br />
-              Selecionar autoriza o preenchimento automático. Você revisa antes
-              de gerar código. Consome seu uso de IA.
-            </p>
-          </div>
         )}
         {stageNumber === 3 && (
           <div className="guided-consumption">

@@ -1,10 +1,15 @@
 import { useEffect, useRef, useState } from "react";
-import { ArrowRight, Upload } from "lucide-react";
+import { ArrowRight, Upload, Info } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import { ErrorNotice } from "../shared/ui";
 import type { Operation } from "../shared/types";
+import { WorkspaceMenu } from "./WorkspaceMenu";
 import { inProgress } from "./useProjectOperations";
-import { usePublicationReadiness } from "./usePublication";
+import { publicationBlockedReason } from "./publicationDiagnostic";
+import {
+  automaticVerificationMessage,
+  usePublicationReadiness,
+} from "./usePublication";
 
 export function PublicationControl({
   pid,
@@ -13,6 +18,7 @@ export function PublicationControl({
   busy,
   operations,
   beforeNavigate,
+  compact = false,
 }: {
   pid: string;
   revision: string | null;
@@ -20,6 +26,7 @@ export function PublicationControl({
   busy: boolean;
   operations: Operation[];
   beforeNavigate: () => Promise<void>;
+  compact?: boolean;
 }) {
   const navigate = useNavigate();
   const operation = operations.find((item) => item.type === "publication");
@@ -35,13 +42,16 @@ export function PublicationControl({
     };
   }, []);
   const active = !!operation && inProgress(operation);
+  const automaticMessage = automaticVerificationMessage(readiness.data);
   const reason = dirty
     ? "Salve as alterações em uma revisão antes de publicar."
     : readiness.error
       ? "Não foi possível verificar a publicação."
       : readiness.loading
         ? "Verificando publicação…"
-        : readiness.data?.reasons.map((item) => item.message).join(" ");
+        : active && operation
+          ? publicationBlockedReason(operation)
+          : readiness.data?.reasons.map((item) => item.message).join(" ");
   async function openPublication() {
     if (navigating.current) return;
     navigating.current = true;
@@ -58,24 +68,8 @@ export function PublicationControl({
       if (mounted.current) setLeaving(false);
     }
   }
-  return (
-    <div className="publication-control">
-      <button
-        className="button primary"
-        disabled={
-          busy ||
-          leaving ||
-          dirty ||
-          active ||
-          !!readiness.error ||
-          !readiness.data?.can_publish
-        }
-        aria-describedby="publication-reason"
-        onClick={() => void openPublication()}
-      >
-        <Upload size={16} />
-        {leaving ? "Abrindo publicação…" : "Publicar"}
-      </button>
+  const details = (
+    <>
       {(operation ||
         readiness.data?.publication?.url ||
         (!!reason && !readiness.loading)) && (
@@ -92,13 +86,72 @@ export function PublicationControl({
       )}
       <div id="publication-reason" className="publication-reason" role="status">
         {reason}
+        {operation?.state === "reconciling" &&
+          operation.result_ref.publication_recovery?.message && (
+            <p>{operation.result_ref.publication_recovery.message}</p>
+          )}
+        {automaticMessage && <p>{automaticMessage}</p>}
       </div>
-      {(!!readiness.error || (!!reason && !readiness.loading)) && (
+      {(!!readiness.error ||
+        (!!reason &&
+          !readiness.loading &&
+          !active &&
+          !readiness.data?.automatic_verification?.enabled)) && (
         <button className="text-button small" onClick={readiness.refresh}>
           Verificar novamente
         </button>
       )}
       <ErrorNotice error={error} />
+    </>
+  );
+  return (
+    <div className={"publication-control" + (compact ? " is-compact" : "")}>
+      <button
+        className="button primary"
+        disabled={
+          busy ||
+          leaving ||
+          dirty ||
+          active ||
+          !!readiness.error ||
+          readiness.loading ||
+          readiness.data?.revision_id !== revision ||
+          !readiness.data?.can_publish
+        }
+        aria-describedby={
+          compact ? "publication-compact-reason" : "publication-reason"
+        }
+        onClick={() => void openPublication()}
+      >
+        <Upload size={16} />
+        {leaving ? "Abrindo publicação…" : "Publicar"}
+      </button>
+      {compact && (
+        <span
+          id="publication-compact-reason"
+          className="publication-compact-reason"
+        >
+          {dirty
+            ? "Salve a revisão"
+            : active
+              ? operation?.state === "reconciling"
+                ? "Resultado pendente"
+                : "Em andamento"
+              : reason && !readiness.loading
+                ? "Conferir detalhes"
+                : ""}
+        </span>
+      )}
+      {compact ? (
+        <WorkspaceMenu
+          label="Detalhes da publicação"
+          icon={<Info size={17} aria-hidden="true" />}
+        >
+          {details}
+        </WorkspaceMenu>
+      ) : (
+        details
+      )}
     </div>
   );
 }

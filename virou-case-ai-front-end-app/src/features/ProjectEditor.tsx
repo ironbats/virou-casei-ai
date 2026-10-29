@@ -1,6 +1,11 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { EditorView, basicSetup } from "codemirror";
-import { Annotation, EditorState } from "@codemirror/state";
+import {
+  Annotation,
+  EditorState,
+  StateEffect,
+  Compartment,
+} from "@codemirror/state";
 import { keymap } from "@codemirror/view";
 import { indentWithTab } from "@codemirror/commands";
 import { javascript } from "@codemirror/lang-javascript";
@@ -10,8 +15,10 @@ import { json } from "@codemirror/lang-json";
 import { python } from "@codemirror/lang-python";
 import { sql } from "@codemirror/lang-sql";
 import { markdown } from "@codemirror/lang-markdown";
+import { WorkspaceMenu } from "./WorkspaceMenu";
 import { canFormat, formatCode } from "./formatCode";
 import { useFormattedSource } from "./useFormattedSource";
+import { protectedMigration } from "./migrationFiles";
 const externalChange = Annotation.define<boolean>();
 import {
   ChevronDown,
@@ -21,6 +28,9 @@ import {
   Plus,
   Trash2,
   X,
+  PanelLeft,
+  Braces,
+  LockKeyhole,
 } from "lucide-react";
 
 function language(path: string) {
@@ -37,12 +47,16 @@ function language(path: string) {
   if (/\.md$/.test(path)) return markdown();
   return [];
 }
+type EditorSession = { state: EditorState; top: number; left: number };
+
 function Code({
   path,
   value,
   readOnly,
   onChange,
+  sessions,
 }: {
+  sessions: Map<string, EditorSession>;
   path: string;
   value: string;
   readOnly: boolean;
@@ -52,60 +66,90 @@ function Code({
     editor = useRef<EditorView | null>(null),
     change = useRef(onChange);
   change.current = onChange;
+  const readonly = useRef(new Compartment());
   useEffect(() => {
-    const view = new EditorView({
-      parent: host.current!,
-      state: EditorState.create({
-        doc: value,
-        extensions: [
-          basicSetup,
-          EditorView.cspNonce.of(
-            document.querySelector<HTMLMetaElement>('meta[name="csp-nonce"]')
-              ?.content ?? "",
-          ),
-          language(path),
-          keymap.of([indentWithTab]),
-          EditorState.readOnly.of(readOnly),
-          EditorState.lineSeparator.of(value.includes("\r\n") ? "\r\n" : "\n"),
-          EditorView.editable.of(!readOnly),
-          EditorView.contentAttributes.of({
-            "aria-label": "Conteúdo de " + path,
-            "aria-describedby": "editor-help",
-          }),
-          EditorView.updateListener.of((update) => {
-            if (
-              update.docChanged &&
-              update.transactions.some(
-                (t) => t.docChanged && !t.annotation(externalChange),
-              )
-            )
-              change.current(update.state.sliceDoc());
-          }),
-          EditorView.theme({
-            "&": { height: "100%", fontSize: "13px" },
-            ".cm-scroller": {
-              overflow: "auto",
-              fontFamily: "ui-monospace, SFMono-Regular, Consolas, monospace",
-            },
-            ".cm-content": { minHeight: "360px" },
-            ".cm-gutters": {
-              backgroundColor: "#f8f9fb",
-              color: "#536173",
-              borderRight: "1px solid #e5e8ed",
-            },
-            "&.cm-focused": { outline: "2px solid #496887" },
-          }),
-        ],
+    const extensions = [
+      basicSetup,
+      EditorView.cspNonce.of(
+        document.querySelector<HTMLMetaElement>('meta[name="csp-nonce"]')
+          ?.content ?? "",
+      ),
+      language(path),
+      keymap.of([indentWithTab]),
+      readonly.current.of([
+        EditorState.readOnly.of(readOnly),
+        EditorView.editable.of(!readOnly),
+      ]),
+      EditorState.lineSeparator.of(value.includes("\r\n") ? "\r\n" : "\n"),
+      EditorView.contentAttributes.of({
+        "aria-label": "Conteúdo de " + path,
+        "aria-describedby": "editor-help",
       }),
-    });
+      EditorView.updateListener.of((update) => {
+        if (
+          update.docChanged &&
+          update.transactions.some(
+            (transaction) =>
+              transaction.docChanged && !transaction.annotation(externalChange),
+          )
+        )
+          change.current(update.state.sliceDoc());
+      }),
+      EditorView.theme({
+        "&": { height: "100%", fontSize: "13px" },
+        ".cm-scroller": {
+          overflow: "auto",
+          fontFamily: "ui-monospace, SFMono-Regular, Consolas, monospace",
+        },
+        ".cm-content": { minHeight: "100%" },
+        ".cm-gutters": {
+          backgroundColor: "#f8f9fb",
+          color: "#536173",
+          borderRight: "1px solid #e5e8ed",
+        },
+        "&.cm-focused": { outline: "2px solid #496887", outlineOffset: "-2px" },
+      }),
+    ];
+    const cached = sessions.get(path);
+    const state =
+      cached?.state.sliceDoc() === value
+        ? cached.state.update({
+            effects: StateEffect.reconfigure.of(extensions),
+          }).state
+        : EditorState.create({ doc: value, extensions });
+    const view = new EditorView({ parent: host.current!, state });
     view.scrollDOM.tabIndex = 0;
     view.scrollDOM.setAttribute("aria-label", "Área de código de " + path);
     editor.current = view;
+    const frame = requestAnimationFrame(() => {
+      if (cached) {
+        view.scrollDOM.scrollTop = cached.top;
+        view.scrollDOM.scrollLeft = cached.left;
+      }
+      view.requestMeasure();
+    });
+    const observer = new ResizeObserver(() => view.requestMeasure());
+    observer.observe(host.current!);
     return () => {
+      cancelAnimationFrame(frame);
+      observer.disconnect();
+      sessions.set(path, {
+        state: view.state,
+        top: view.scrollDOM.scrollTop,
+        left: view.scrollDOM.scrollLeft,
+      });
       view.destroy();
       editor.current = null;
     };
-  }, [path, readOnly]);
+  }, [path, sessions]);
+  useEffect(() => {
+    editor.current?.dispatch({
+      effects: readonly.current.reconfigure([
+        EditorState.readOnly.of(readOnly),
+        EditorView.editable.of(!readOnly),
+      ]),
+    });
+  }, [readOnly]);
   useEffect(() => {
     const view = editor.current;
     if (view && view.state.sliceDoc() !== value)
@@ -123,30 +167,49 @@ export function ProjectEditor({
   onSelect,
   onChange,
   onAdd,
+  onAddMigration,
+  onRestoreMigration,
   onRemove,
   readOnly,
+  toolbar,
+  menuActions,
+  preview,
+  mode = "code",
 }: {
+  toolbar?: ReactNode;
+  menuActions?: ReactNode;
+  preview?: ReactNode;
+  mode?: string;
   files: Record<string, string>;
   base: Record<string, string>;
   selected: string;
   onSelect: (p: string) => void;
   onChange: (p: string, s: string) => void;
   onAdd: () => void;
+  onAddMigration?: () => void;
+  onRestoreMigration?: () => void;
   onRemove: () => void;
   readOnly: boolean;
 }) {
+  const sessions = useRef(new Map<string, EditorSession>());
+  const editorRoot = useRef<HTMLDivElement>(null);
+  const [explorer, setExplorer] = useState(() => window.innerWidth >= 768);
+  const migrationProtected = protectedMigration(selected, base);
+  const sourceReadOnly = readOnly || migrationProtected;
   const formatted = useFormattedSource(
     selected,
     files[selected] ?? "",
-    (value) => onChange(selected, value),
+    (value) => {
+      if (!sourceReadOnly) onChange(selected, value);
+    },
   );
   const [tabs, setTabs] = useState<string[]>([]),
     [closed, setClosed] = useState<Set<string>>(new Set()),
     [plain, setPlain] = useState(false),
     [formatting, setFormatting] = useState(false),
     [formatMessage, setFormatMessage] = useState("");
-  const latest = useRef({ files, readOnly, onChange });
-  latest.current = { files, readOnly, onChange };
+  const latest = useRef({ files, base, readOnly, onChange });
+  latest.current = { files, base, readOnly, onChange };
   const mounted = useRef(true);
   useEffect(() => {
     mounted.current = true;
@@ -157,14 +220,23 @@ export function ProjectEditor({
   async function formatSelected() {
     const path = selected,
       source = files[path];
-    if (formatting || readOnly || source === undefined || !canFormat(path))
+    if (
+      formatting ||
+      sourceReadOnly ||
+      source === undefined ||
+      !canFormat(path)
+    )
       return;
     setFormatting(true);
     setFormatMessage("");
     try {
       const formatted = await formatCode(path, source);
       if (!mounted.current) return;
-      if (latest.current.readOnly || latest.current.files[path] !== source) {
+      if (
+        latest.current.readOnly ||
+        protectedMigration(path, latest.current.base) ||
+        latest.current.files[path] !== source
+      ) {
         setFormatMessage(
           "O arquivo mudou durante a formatação. Tente novamente; sua edição foi preservada.",
         );
@@ -187,6 +259,12 @@ export function ProjectEditor({
     if (selected)
       setTabs((old) => (old.includes(selected) ? old : [...old, selected]));
   }, [selected]);
+  const cachedDocument = sessions.current.get(selected)?.state.sliceDoc();
+  const displayedValue = migrationProtected
+    ? (files[selected] ?? "")
+    : cachedDocument !== undefined && cachedDocument === files[selected]
+      ? cachedDocument
+      : formatted.value;
   const paths = Object.keys(files).sort(),
     opened = tabs.filter((p) => p in files);
   const entries: { path: string; folder: boolean; depth: number }[] = [];
@@ -217,9 +295,11 @@ export function ProjectEditor({
         ),
   );
   return (
-    <>
+    <div className="project-editor" ref={editorRoot}>
       <div
-        className="ide-editor"
+        className={
+          "ide-editor" + (explorer ? " explorer-open" : " explorer-collapsed")
+        }
         onKeyDown={(event) => {
           if (event.shiftKey && event.altKey && event.code === "KeyF") {
             event.preventDefault();
@@ -227,9 +307,13 @@ export function ProjectEditor({
           }
         }}
       >
-        <aside className="file-tree">
+        <aside
+          className="file-tree"
+          hidden={!explorer}
+          aria-label="Explorador de arquivos"
+        >
           <div className="file-tree-heading">
-            <strong>ARQUIVOS</strong>
+            <strong>Arquivos</strong>
             <div className="actions">
               <button
                 className="icon-button"
@@ -242,7 +326,7 @@ export function ProjectEditor({
               <button
                 className="icon-button"
                 aria-label="Remover arquivo selecionado"
-                disabled={readOnly || !selected}
+                disabled={sourceReadOnly || !selected}
                 onClick={onRemove}
               >
                 <Trash2 size={15} />
@@ -285,7 +369,18 @@ export function ProjectEditor({
                 aria-expanded={e.folder ? !closed.has(e.path) : undefined}
                 aria-selected={!e.folder && selected === e.path}
                 style={{ paddingLeft: 10 + e.depth * 13 }}
-                title={e.path}
+                title={
+                  e.path +
+                  (protectedMigration(e.path, base)
+                    ? " — migration protegida"
+                    : "")
+                }
+                aria-description={
+                  e.path +
+                  (protectedMigration(e.path, base)
+                    ? " — somente leitura; migration consolidada"
+                    : "")
+                }
                 onKeyDown={(event) => {
                   if (
                     e.folder &&
@@ -308,7 +403,19 @@ export function ProjectEditor({
                       else next.add(e.path);
                       return next;
                     });
-                  else onSelect(e.path);
+                  else {
+                    onSelect(e.path);
+                    if (window.innerWidth < 768) {
+                      setExplorer(false);
+                      requestAnimationFrame(() =>
+                        editorRoot.current
+                          ?.querySelector<HTMLElement>(
+                            ".cm-content, .code-editor, .file-toggle",
+                          )
+                          ?.focus({ preventScroll: true }),
+                      );
+                    }
+                  }
                 }}
               >
                 {e.folder ? (
@@ -324,6 +431,9 @@ export function ProjectEditor({
                   <FileCode2 size={14} />
                 )}
                 <span>{e.path.split("/").at(-1)}</span>
+                {!e.folder && protectedMigration(e.path, base) && (
+                  <LockKeyhole size={12} aria-label="Migration protegida" />
+                )}
                 {!e.folder && files[e.path] !== base[e.path] && (
                   <span aria-label="alterado">•</span>
                 )}
@@ -332,61 +442,136 @@ export function ProjectEditor({
           </div>
         </aside>
         <div className="editor-main">
-          <div className="code-toolbar">
-            <span title={selected}>
-              {selected || "Nenhum arquivo selecionado"}
-            </span>
+          <div className="workspace-editor-toolbar">
             <button
-              className="button"
-              title="Formatar arquivo (Shift + Alt + F)"
-              disabled={readOnly || formatting || !canFormat(selected)}
-              onClick={() => void formatSelected()}
+              className="icon-button file-toggle"
+              aria-label={explorer ? "Recolher arquivos" : "Mostrar arquivos"}
+              aria-expanded={explorer}
+              title={explorer ? "Recolher arquivos" : "Mostrar arquivos"}
+              onClick={() => setExplorer((value) => !value)}
             >
-              {formatting ? "Formatando…" : "Formatar arquivo"}
+              <PanelLeft size={17} />
             </button>
-          </div>
-          <div
-            className="file-tabs"
-            role="tablist"
-            aria-label="Arquivos abertos"
-          >
-            {opened.map((path) => (
-              <div className={selected === path ? "active" : ""} key={path}>
-                <button
-                  role="tab"
-                  aria-selected={selected === path}
-                  title={path + " — Delete fecha a aba"}
-                  onKeyDown={(event) => {
-                    if (event.key === "Delete") {
-                      event.preventDefault();
-                      setTabs((old) => old.filter((p) => p !== path));
-                      if (selected === path)
-                        onSelect(opened.find((p) => p !== path) ?? "");
-                    }
-                  }}
-                  onClick={() => onSelect(path)}
-                >
-                  {path.split("/").at(-1)}
-                  {files[path] !== base[path] && " •"}
-                  <span
-                    className="tab-close"
-                    aria-hidden="true"
-                    onClick={(event) => {
-                      event.stopPropagation();
-                      setTabs((old) => old.filter((p) => p !== path));
-                      if (selected === path)
-                        onSelect(opened.find((p) => p !== path) ?? "");
+            <div
+              className="file-tabs"
+              role="tablist"
+              aria-label="Arquivos abertos"
+            >
+              {opened.map((path) => (
+                <div className={selected === path ? "active" : ""} key={path}>
+                  <button
+                    role="tab"
+                    aria-selected={selected === path}
+                    title={path + " — Delete fecha a aba"}
+                    onKeyDown={(event) => {
+                      if (event.key === "Delete") {
+                        event.preventDefault();
+                        setTabs((old) => old.filter((p) => p !== path));
+                        if (selected === path)
+                          onSelect(opened.find((p) => p !== path) ?? "");
+                      }
                     }}
+                    onClick={() => onSelect(path)}
                   >
-                    <X size={12} />
-                  </span>
+                    {path.split("/").at(-1)}
+                    {files[path] !== base[path] && " •"}
+                    <span
+                      className="tab-close"
+                      aria-hidden="true"
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        setTabs((old) => old.filter((p) => p !== path));
+                        if (selected === path)
+                          onSelect(opened.find((p) => p !== path) ?? "");
+                      }}
+                    >
+                      <X size={12} />
+                    </span>
+                  </button>
+                </div>
+              ))}
+            </div>
+            <div className="workspace-editor-actions">{toolbar}</div>
+            <WorkspaceMenu label="Opções do editor">
+              <div className="workspace-editor-menu-actions">{menuActions}</div>
+              <p className="small workspace-file-path" tabIndex={0}>
+                {selected || "Nenhum arquivo selecionado"}
+              </p>
+              <button
+                className="button"
+                title="Formatar arquivo (Shift + Alt + F)"
+                disabled={sourceReadOnly || formatting || !canFormat(selected)}
+                onClick={() => void formatSelected()}
+              >
+                <Braces size={16} />
+                {formatting ? "Formatando…" : "Formatar arquivo"}
+              </button>
+              {onAddMigration && (
+                <button
+                  className="button"
+                  disabled={readOnly}
+                  onClick={onAddMigration}
+                >
+                  <Plus size={16} /> Criar nova migration
                 </button>
-              </div>
-            ))}
+              )}
+              <button className="button" onClick={() => setPlain(!plain)}>
+                {plain ? "Editor com destaque" : "Usar texto simples"}
+              </button>
+              <p id="editor-help" className="small">
+                Tab indenta. Esc, depois Tab, sai do editor. Shift + Alt + F
+                formata o arquivo.
+              </p>
+            </WorkspaceMenu>
           </div>
+          {migrationProtected && mode === "code" && (
+            <div className="workspace-migration-notice" role="status">
+              <span>
+                <LockKeyhole size={15} aria-hidden="true" /> Migration
+                consolidada · somente leitura
+              </span>
+              <p>
+                O caminho e o conteúdo desta migration fazem parte do histórico
+                protegido. Para evoluir o banco, crie um novo arquivo
+                incremental.
+              </p>
+              {files[selected] !== base[selected] && (
+                <p>
+                  O rascunho contém uma alteração histórica que não pode ser
+                  salva. Restaure o conteúdo da revisão salva antes de
+                  continuar.
+                </p>
+              )}
+              <div className="actions">
+                {onAddMigration && (
+                  <button
+                    className="button small"
+                    disabled={readOnly}
+                    onClick={onAddMigration}
+                  >
+                    Criar nova migration
+                  </button>
+                )}
+                {files[selected] !== base[selected] && onRestoreMigration && (
+                  <button
+                    className="button small"
+                    disabled={readOnly}
+                    onClick={onRestoreMigration}
+                  >
+                    Restaurar migration da revisão salva
+                  </button>
+                )}
+              </div>
+            </div>
+          )}
           {selected && selected in files ? (
-            <div role="tabpanel" aria-label={selected} className="code-surface">
-              {!formatted.ready ? (
+            <div
+              role="tabpanel"
+              aria-label={selected}
+              className="code-surface"
+              hidden={mode !== "code"}
+            >
+              {!migrationProtected && !formatted.ready ? (
                 <p className="format-loading small muted" role="status">
                   Preparando código formatado…
                 </p>
@@ -395,15 +580,16 @@ export function ProjectEditor({
                   className="code-editor"
                   spellCheck={false}
                   aria-label={"Conteúdo de " + selected}
-                  value={formatted.value}
-                  readOnly={readOnly}
+                  value={displayedValue}
+                  readOnly={sourceReadOnly}
                   onChange={(e) => formatted.edit(e.target.value)}
                 />
               ) : (
                 <Code
+                  sessions={sessions.current}
                   path={selected}
-                  value={formatted.value}
-                  readOnly={readOnly}
+                  value={displayedValue}
+                  readOnly={sourceReadOnly}
                   onChange={formatted.edit}
                 />
               )}
@@ -411,9 +597,12 @@ export function ProjectEditor({
           ) : (
             <p className="empty-editor">Selecione um arquivo na árvore.</p>
           )}
+          <div className="workspace-preview" hidden={mode !== "preview"}>
+            {preview}
+          </div>
         </div>
       </div>
-      {formatted.ready && formatted.error && (
+      {!migrationProtected && formatted.ready && formatted.error && (
         <p className="format-fallback small muted" role="status">
           {formatted.error}
         </p>
@@ -423,14 +612,6 @@ export function ProjectEditor({
           {formatMessage}
         </p>
       )}
-      <div className="editor-hint">
-        <span id="editor-help">
-          Tab indenta. Esc, depois Tab, sai do editor.
-        </span>
-        <button className="text-button" onClick={() => setPlain(!plain)}>
-          {plain ? "Editor com destaque" : "Usar texto simples"}
-        </button>
-      </div>
-    </>
+    </div>
   );
 }

@@ -11,6 +11,8 @@ import {
   Globe,
   LoaderCircle,
   RefreshCw,
+  ScanSearch,
+  Server,
   ShieldCheck,
   Upload,
 } from "lucide-react";
@@ -21,7 +23,18 @@ import type { Operation, Project } from "../shared/types";
 import { ErrorNotice, Loading, useLoad } from "../shared/ui";
 import { inProgress } from "./useProjectOperations";
 import { PublicationBuildDiagnostics } from "./PublicationBuildDiagnostics";
+import { CodeAnalysisPanel } from "./CodeAnalysisPanel";
+import { PublicationOperationDiagnostics } from "./PublicationOperationDiagnostics";
+import { PublicationRecoveryPanel } from "./PublicationRecoveryPanel";
+import type { RecoverySnapshot } from "./publicationRecovery";
 import {
+  migrationPending,
+  publicationAttentionTitle,
+  publicationBlockedReason,
+  publicationDiagnostic,
+} from "./publicationDiagnostic";
+import {
+  automaticVerificationMessage,
   publicationUrl,
   usePublicationOperation,
   usePublicationReadiness,
@@ -61,9 +74,16 @@ function PublicationSteps({ operation }: { operation: Operation | null }) {
   const activity = operation?.activity ?? [];
   const observed = new Set(activity.map((event) => event.stage));
   if (operation) observed.add(operation.progress_stage);
-  const current = steps.findIndex((step) =>
-    step.stages.includes(operation?.progress_stage ?? ""),
-  );
+  const failureStage = operation?.result_ref.publication_failure?.stage;
+  if (failureStage) observed.add(failureStage);
+  const recovery = operation?.result_ref.publication_recovery;
+  const currentStage =
+    operation &&
+    ["failed", "reconciling"].includes(operation.state) &&
+    failureStage
+      ? failureStage
+      : (operation?.progress_stage ?? "");
+  const current = steps.findIndex((step) => step.stages.includes(currentStage));
   const lastObserved = steps.reduce(
     (latest, step, index) =>
       step.stages.some((stage) => observed.has(stage)) ? index : latest,
@@ -79,22 +99,32 @@ function PublicationSteps({ operation }: { operation: Operation | null }) {
         const completed =
           seen && (operation?.state === "succeeded" || index < activeIndex);
         const active = !!operation && index === activeIndex && !completed;
+        const awaitingReview =
+          active &&
+          operation.state === "reconciling" &&
+          recovery?.state === "attention";
         const interrupted =
           active &&
-          (operation.state === "failed" || operation.state === "cancelled");
+          (operation.state === "failed" ||
+            operation.state === "cancelled" ||
+            awaitingReview);
         const status = completed
           ? "Concluída"
-          : interrupted
-            ? "Interrompida"
-            : active && operation.state === "reconciling"
-              ? "Em conferência"
-              : active
-                ? operation.state === "queued"
-                  ? "Na fila"
-                  : "Em andamento"
-                : terminal || index < activeIndex
-                  ? "Sem registro"
-                  : "Aguardando";
+          : awaitingReview
+            ? "Confirmação necessária"
+            : interrupted
+              ? "Interrompida"
+              : active && operation.state === "reconciling"
+                ? "Em conferência"
+                : active
+                  ? operation.state === "queued"
+                    ? "Na fila"
+                    : "Em andamento"
+                  : index > activeIndex || !operation
+                    ? "Não iniciada"
+                    : terminal || index < activeIndex
+                      ? "Sem registro"
+                      : "Não iniciada";
         return (
           <li
             key={step.title}
@@ -135,6 +165,18 @@ function PublicationSteps({ operation }: { operation: Operation | null }) {
 }
 
 function operationTitle(operation: Operation) {
+  if (
+    operation.state === "reconciling" &&
+    operation.result_ref.publication_recovery?.state === "attention"
+  )
+    return publicationAttentionTitle(operation);
+  if (operation.state === "reconciling" && migrationPending(operation))
+    return "Conferindo se a migration foi aplicada";
+  if (
+    operation.state === "failed" &&
+    operation.error_code === "MIGRATION_SQL_REJECTED"
+  )
+    return "Migration recusada pelo banco";
   const titles: Record<string, string> = {
     queued: "Publicação na fila",
     running: "Publicação em andamento",
@@ -161,6 +203,9 @@ function PublicationScreen({ pid }: { pid: string }) {
   );
   const tracking = usePublicationOperation(pid, operationId);
   const operation = tracking.operation;
+  const recovery = operation?.result_ref.publication_recovery;
+  const awaitingReview =
+    operation?.state === "reconciling" && recovery?.state === "attention";
   const readiness = usePublicationReadiness(
     pid,
     project.data?.current_revision_id ?? null,
@@ -170,10 +215,26 @@ function PublicationScreen({ pid }: { pid: string }) {
   const [sending, setSending] = useState(false);
   const [failure, setFailure] = useState<unknown>(null);
   const [copyStatus, setCopyStatus] = useState("");
+  const [recoveryRefreshKey, setRecoveryRefreshKey] = useState(0);
+  const [recoverySnapshot, setRecoverySnapshot] =
+    useState<RecoverySnapshot | null>(null);
+  const currentRecovery =
+    recoverySnapshot?.operation_id === operation?.id &&
+    recoverySnapshot?.project_id === pid
+      ? recoverySnapshot
+      : null;
+  const resolvedRecovery =
+    currentRecovery?.recovery_state === "resolved" &&
+    currentRecovery.classification === "resolved";
+  const pendingRecovery =
+    operation?.state === "reconciling" &&
+    (awaitingReview || !!currentRecovery?.request) &&
+    !resolvedRecovery;
   const sendingRef = useRef(false);
   const mounted = useRef(true);
   const heading = useRef<HTMLHeadingElement>(null);
   const statusHeading = useRef<HTMLHeadingElement>(null);
+  const analysisRegion = useRef<HTMLElement>(null);
   const active = !!operation && inProgress(operation);
   const canPublish =
     !!project.data?.current_revision_id &&
@@ -207,6 +268,7 @@ function PublicationScreen({ pid }: { pid: string }) {
   }, []);
   useEffect(() => setCopyStatus(""), [url]);
   function refresh() {
+    setRecoveryRefreshKey((value) => value + 1);
     readiness.refresh();
     tracking.refresh();
     if (project.error) project.reload();
@@ -260,7 +322,22 @@ function PublicationScreen({ pid }: { pid: string }) {
     ? "Não foi possível verificar a publicação."
     : readiness.loading
       ? "Verificando publicação…"
-      : readiness.data?.reasons.map((item) => item.message).join(" ") || "";
+      : active && operation
+        ? publicationBlockedReason(operation)
+        : readiness.data?.reasons.map((item) => item.message).join(" ") || "";
+  const automaticMessage = automaticVerificationMessage(readiness.data);
+  const analysisContext = [
+    ...(readiness.data?.reasons.map(
+      (item) => `Disponibilidade da publicação · ${item.code}: ${item.message}`,
+    ) ?? []),
+    ...[failure, tracking.error, readiness.error].flatMap((error) =>
+      error instanceof ApiError
+        ? [`${error.code}: ${error.message}`]
+        : error instanceof Error
+          ? [error.message]
+          : [],
+    ),
+  ].join("\n");
   const status =
     operation?.state ??
     (sending
@@ -272,34 +349,44 @@ function PublicationScreen({ pid }: { pid: string }) {
           : canPublish
             ? "ready"
             : "blocked");
-  const title = operation
-    ? operationTitle(operation)
-    : status === "sending"
-      ? "Enviando solicitação"
-      : status === "loading"
-        ? "Consultando publicação"
-        : status === "unavailable"
-          ? "Não foi possível consultar o status"
-          : status === "ready"
-            ? "Pronto para publicar"
-            : "Publicação aguardando liberação";
-  const message = operation
-    ? operation.state === "queued"
-      ? "Sua solicitação foi recebida e aguarda o executor."
-      : operation.state === "failed" &&
-          operation.result_ref.publication_failure?.message
-        ? operation.result_ref.publication_failure.message
-        : operation.progress_message ||
-          "O status será atualizado conforme a publicação avançar."
-    : status === "ready"
-      ? "Confira a revisão salva e confirme o envio para começar."
-      : status === "sending"
-        ? "Aguardando a confirmação do recebimento pela plataforma."
-        : status === "loading"
-          ? "Buscando a disponibilidade e o último resultado do projeto."
-          : "Consulte as orientações abaixo para continuar.";
+  const title = resolvedRecovery
+    ? "Pendência encerrada"
+    : pendingRecovery
+      ? "Uma pendência impede a nova publicação"
+      : operation
+        ? operationTitle(operation)
+        : status === "sending"
+          ? "Enviando solicitação"
+          : status === "loading"
+            ? "Consultando publicação"
+            : status === "unavailable"
+              ? "Não foi possível consultar o status"
+              : status === "ready"
+                ? "Pronto para publicar"
+                : "Publicação aguardando liberação";
+  const message = resolvedRecovery
+    ? "Nenhuma migration foi reaplicada. Confira a prontidão abaixo para publicar a revisão atual."
+    : pendingRecovery
+      ? "Confira e recupere a tentativa anterior com segurança."
+      : operation
+        ? operation.state === "queued"
+          ? "Sua solicitação foi recebida e aguarda o executor."
+          : operation.state === "reconciling" && recovery?.message
+            ? recovery.last_error_message || recovery.message
+            : operation.state === "failed" &&
+                operation.result_ref.publication_failure?.message
+              ? operation.result_ref.publication_failure.message
+              : operation.progress_message ||
+                "O status será atualizado conforme a publicação avançar."
+        : status === "ready"
+          ? "Confira a revisão salva e confirme o envio para começar."
+          : status === "sending"
+            ? "Aguardando a confirmação do recebimento pela plataforma."
+            : status === "loading"
+              ? "Buscando a disponibilidade e o último resultado do projeto."
+              : "Consulte as orientações abaixo para continuar.";
   const StatusIcon =
-    status === "succeeded"
+    status === "succeeded" || resolvedRecovery
       ? CircleCheck
       : [
             "failed",
@@ -330,10 +417,24 @@ function PublicationScreen({ pid }: { pid: string }) {
           </h1>
           <p>{project.data?.name ?? "Acompanhe sua publicação"}</p>
         </div>
-        <button className="button" disabled={sending} onClick={refresh}>
-          <RefreshCw size={16} />
-          Atualizar status
-        </button>
+        <div className="actions publication-page-actions">
+          <button
+            className="button"
+            disabled={!project.data}
+            aria-controls="publication-analysis"
+            onClick={() => {
+              analysisRegion.current?.focus({ preventScroll: true });
+              analysisRegion.current?.scrollIntoView({ block: "start" });
+            }}
+          >
+            <ScanSearch size={16} aria-hidden="true" />
+            Análise IA
+          </button>
+          <button className="button" disabled={sending} onClick={refresh}>
+            <RefreshCw size={16} />
+            Atualizar status
+          </button>
+        </div>
       </div>
       <ErrorNotice error={project.error} />
       {!project.data && !project.error && <Loading />}
@@ -342,6 +443,8 @@ function PublicationScreen({ pid }: { pid: string }) {
           <section
             className="panel publication-summary"
             data-state={status}
+            data-pending={pendingRecovery}
+            data-resolved={resolvedRecovery}
             aria-labelledby="publication-status-title"
           >
             <div className="publication-status-icon" aria-hidden="true">
@@ -358,20 +461,25 @@ function PublicationScreen({ pid }: { pid: string }) {
                 </h2>
                 <p>{message}</p>
               </div>
-              {active && (
+              {active && !awaitingReview && (
                 <p className="small muted">
-                  Você pode voltar ao projeto. A publicação continua e pode ser
-                  acompanhada nesta tela.
+                  {operation?.state === "reconciling"
+                    ? "Você pode voltar ao projeto. O acompanhamento desta tentativa continua disponível nesta tela."
+                    : "Você pode voltar ao projeto. A publicação continua e pode ser acompanhada nesta tela."}
                 </p>
               )}
-              {operation?.state === "reconciling" && (
-                <p className="notice">
-                  A plataforma está conferindo o resultado. Aguarde a conclusão
-                  ou procure o suporte com o identificador da operação.
-                </p>
-              )}
-              {operation?.state === "failed" && (
+              {operation?.state === "reconciling" &&
+                !awaitingReview &&
+                recovery?.next_attempt_at && (
+                  <p className="small muted">
+                    Próxima conferência automática:{" "}
+                    {date(recovery.next_attempt_at)}
+                  </p>
+                )}
+              {operation?.state === "failed" && !resolvedRecovery && (
                 <p className="small">
+                  {recovery?.resolution === "pre_upload_failure" &&
+                    "Esta tentativa foi encerrada antes do envio à hospedagem. "}
                   Revise a mensagem da tentativa. Um novo envio fica disponível
                   quando a plataforma liberar a publicação.
                 </p>
@@ -379,9 +487,11 @@ function PublicationScreen({ pid }: { pid: string }) {
               <span className="small muted">
                 {tracking.error
                   ? "Atualização interrompida · último estado preservado"
-                  : active
-                    ? "Acompanhamento automático ativo"
-                    : "Estado consultado na plataforma"}
+                  : awaitingReview
+                    ? "Acompanhamento do status ativo · consulte as evidências para continuar"
+                    : active
+                      ? "Acompanhamento automático do status ativo"
+                      : "Estado consultado na plataforma"}
                 {tracking.syncedAt
                   ? ` · ${date(new Date(tracking.syncedAt).toISOString())}`
                   : ""}
@@ -404,31 +514,107 @@ function PublicationScreen({ pid }: { pid: string }) {
               )}
             </div>
           )}
-          {operation && (
-            <PublicationBuildDiagnostics
-              key={operation.id}
-              operation={operation}
-              projectId={pid}
-              currentRevisionId={project.data.current_revision_id}
-            />
-          )}
           <div className="publication-layout" data-state={status}>
-            <section
-              className="panel publication-progress"
-              aria-labelledby="publication-stages-title"
-            >
-              <h2 id="publication-stages-title">Etapas da publicação</h2>
-              <p className="muted small">
-                O acompanhamento reflete as etapas informadas pela plataforma.
-              </p>
-              <PublicationSteps operation={operation} />
-            </section>
+            <div className="publication-main">
+              {operation && (operation.state === "reconciling" || recovery) && (
+                <PublicationRecoveryPanel
+                  key={`recovery:${operation.id}`}
+                  operation={operation}
+                  projectId={pid}
+                  refreshKey={recoveryRefreshKey}
+                  canPublish={
+                    !!user?.access.allowed_actions.includes("publish")
+                  }
+                  trackingUnavailable={tracking.loading || !!tracking.error}
+                  onSnapshot={setRecoverySnapshot}
+                  onUpdated={() => {
+                    tracking.refresh();
+                    readiness.refresh();
+                  }}
+                />
+              )}
+              {operation && (
+                <PublicationOperationDiagnostics
+                  operation={operation}
+                  projectId={pid}
+                  recoverySnapshot={currentRecovery}
+                />
+              )}
+              {operation && (
+                <PublicationBuildDiagnostics
+                  key={operation.id}
+                  operation={operation}
+                  projectId={pid}
+                  currentRevisionId={project.data.current_revision_id}
+                />
+              )}
+              <section
+                id="publication-analysis"
+                ref={analysisRegion}
+                className="panel publication-analysis"
+                aria-label="Análise IA da publicação"
+                tabIndex={-1}
+              >
+                <CodeAnalysisPanel
+                  projectId={pid}
+                  revisionId={project.data.current_revision_id}
+                  source="publication"
+                  publicationOperationId={operation?.id}
+                  runtimeError={analysisContext || undefined}
+                />
+                <div className="publication-analysis-context">
+                  <p>
+                    Revisão atual:{" "}
+                    <strong>
+                      {project.data.current_revision_id?.slice(0, 8) ??
+                        "Nenhuma revisão salva"}
+                    </strong>
+                  </p>
+                  {operation?.result_ref.revision_id && (
+                    <p>
+                      Diagnóstico da tentativa:{" "}
+                      <strong>
+                        {operation.result_ref.revision_id.slice(0, 8)}
+                      </strong>
+                    </p>
+                  )}
+                </div>
+                {operation?.result_ref.revision_id &&
+                  operation.result_ref.revision_id !==
+                    project.data.current_revision_id && (
+                    <p className="small muted">
+                      Esta tentativa usou outra revisão. Seu diagnóstico será
+                      tratado como histórico ao analisar o código atual.
+                    </p>
+                  )}
+                <p className="small muted">
+                  Usa sua cota de IA. A análise não confirma o banco nem libera
+                  a publicação.
+                </p>
+              </section>
+            </div>
             <div className="publication-side">
+              <section
+                className="panel publication-progress"
+                aria-labelledby="publication-stages-title"
+              >
+                <h2 id="publication-stages-title">
+                  <Server size={22} aria-hidden="true" />
+                  Etapas da publicação
+                </h2>
+                <p className="muted small">
+                  O acompanhamento reflete as etapas informadas pela plataforma.
+                </p>
+                <PublicationSteps operation={operation} />
+              </section>
               <section
                 className="panel publication-confirmation"
                 aria-labelledby="publication-revision-title"
               >
-                <h2 id="publication-revision-title">Revisão para publicar</h2>
+                <h2 id="publication-revision-title">
+                  <Upload size={22} aria-hidden="true" />
+                  Revisão para publicar
+                </h2>
                 <dl className="publication-facts">
                   <div>
                     <dt>Revisão salva</dt>
@@ -453,8 +639,16 @@ function PublicationScreen({ pid }: { pid: string }) {
                 >
                   {reason}
                 </div>
+                {automaticMessage && (
+                  <p className="small muted" role="status">
+                    {automaticMessage}
+                  </p>
+                )}
                 <ErrorNotice error={readiness.error || failure} />
-                {(!!reason || !!readiness.error) && (
+                {(!!readiness.error ||
+                  (!!reason &&
+                    !active &&
+                    !readiness.data?.automatic_verification?.enabled)) && (
                   <button
                     className="text-button small"
                     disabled={sending}
@@ -472,12 +666,6 @@ function PublicationScreen({ pid }: { pid: string }) {
                   <Upload size={16} />
                   {sending ? "Enviando publicação…" : "Publicar esta revisão"}
                 </button>
-                {active && (
-                  <p className="small muted">
-                    Já existe uma publicação em andamento. Aguarde o resultado
-                    para iniciar outro envio.
-                  </p>
-                )}
               </section>
               <section
                 className="panel publication-link"
@@ -510,12 +698,15 @@ function PublicationScreen({ pid }: { pid: string }) {
                       {publication?.revision_id?.slice(0, 8) ?? "não informada"}{" "}
                       · {date(publication?.published_at)}
                     </p>
-                    {active && (
-                      <p className="small muted">
-                        Este link corresponde à última publicação verificada. A
-                        tentativa em andamento aparece nas etapas ao lado.
-                      </p>
-                    )}
+                    {operation &&
+                      operation.result_ref.revision_id !==
+                        publication?.revision_id && (
+                        <p className="small muted">
+                          Este link corresponde à última publicação verificada.
+                          Ele não confirma o resultado da tentativa exibida
+                          nesta tela.
+                        </p>
+                      )}
                     <p className="small" role="status">
                       {copyStatus}
                     </p>
@@ -549,8 +740,30 @@ function PublicationScreen({ pid }: { pid: string }) {
                 )}
                 {operation.error_code && (
                   <div>
-                    <dt>Código para suporte</dt>
-                    <dd>{operation.error_code}</dd>
+                    <dt>Código do erro inicial</dt>
+                    <dd>
+                      {publicationDiagnostic(operation)?.initial_error?.code ||
+                        operation.result_ref.publication_failure?.code ||
+                        operation.error_code}
+                    </dd>
+                  </div>
+                )}
+                {recovery?.last_error_code && (
+                  <div>
+                    <dt>Código da última recuperação</dt>
+                    <dd>{recovery.last_error_code}</dd>
+                  </div>
+                )}
+                {recovery?.last_checked_at && (
+                  <div>
+                    <dt>Última conferência</dt>
+                    <dd>{date(recovery.last_checked_at)}</dd>
+                  </div>
+                )}
+                {recovery && recovery.attempts > 0 && (
+                  <div>
+                    <dt>Consultas de recuperação</dt>
+                    <dd>{recovery.attempts}</dd>
                   </div>
                 )}
               </dl>

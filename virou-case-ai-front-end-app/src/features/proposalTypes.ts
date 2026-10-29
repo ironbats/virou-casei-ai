@@ -1,4 +1,4 @@
-import type { Operation } from "../shared/types";
+import type { MigrationHistory, Operation } from "../shared/types";
 
 export type ProposalFile = {
   id: string;
@@ -20,6 +20,7 @@ export type Proposal = {
   expected_project_version: number;
   state: "generated" | "applied" | "discarded" | "conflict";
   files: ProposalFile[];
+  migration_history?: MigrationHistory;
   verification_results: {
     kind: string;
     state: "not_run" | "running" | "passed" | "failed";

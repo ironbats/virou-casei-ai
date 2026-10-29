@@ -527,7 +527,7 @@ test("ação por campo mantém teclado, contraste e layout sem overflow nos tama
   for (const width of [320, 375, 768, 1024, 1440]) {
     await page.setViewportSize({ width, height: 950 });
     if (width <= 900)
-      await page.getByRole("tab", { name: "Construção", exact: true }).click();
+      await page.getByRole("tab", { name: "Chat", exact: true }).click();
     await expect(generateButton(page)).toBeVisible();
     expect(
       await page.evaluate(

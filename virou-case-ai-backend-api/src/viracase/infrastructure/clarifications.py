@@ -5,6 +5,7 @@ from sqlalchemy import select
 from viracase.domain.rules import RuleError, canonical_hash, validate_file_entries
 from viracase.infrastructure.integrations import Integrations
 from viracase.infrastructure.models import Operation
+from viracase.infrastructure.repository_dto import operation_request_text
 
 
 def clarification_chain(db, actor, project, identity, base):
@@ -77,7 +78,7 @@ def continuation_context(db, actor, project, payload):
     history = copy.deepcopy(chain[0].payload.get("history", []))
     history.extend(
         {
-            "request": item.payload.get("brief", ""),
+            "request": operation_request_text(item) or "",
             "response": item.result.get("message", ""),
             "outcome": "clarification",
             "applied": False,
@@ -85,11 +86,22 @@ def continuation_context(db, actor, project, payload):
         for item in chain
     )
     checkpoint = chain[-1].payload.get("clarification_checkpoint")
-    return {
+    result = {
         "history": history,
         "attachment_snapshots": attachments,
         "clarification_checkpoint": copy.deepcopy(checkpoint),
     }
+    parent = chain[-1]
+    if parent.payload.get("analysis_id"):
+        from viracase.infrastructure.code_analysis import correction_context, owned_analysis
+
+        analysis = owned_analysis(db, actor, project.id, parent.payload["analysis_id"])
+        result.update(
+            analysis_id=analysis.id,
+            analysis_context=copy.deepcopy(parent.payload.get("analysis_context") or correction_context(analysis)),
+            auto_apply=False,
+        )
+    return result
 
 
 def continuation_files(payload, original, secrets):

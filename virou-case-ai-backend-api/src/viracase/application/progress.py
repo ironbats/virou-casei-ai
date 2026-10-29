@@ -1,6 +1,10 @@
 from viracase.domain.rules import utcnow
 
 STAGES = {
+    "analysis_queued": "Análise solicitada. Aguardando a IA.",
+    "analysis_running": "Analisando o código e as evidências sem alterar os arquivos.",
+    "analysis_ready": "Diagnóstico pronto. Revise os problemas antes de solicitar uma correção.",
+    "analysis_failed": "Não foi possível concluir a análise. O código foi preservado.",
     "preparation_filling": "Preparando sugestões para os campos selecionados.",
     "preparation_repairing": "Conferindo novamente a resposta estruturada dos campos.",
     "preparation_ready": "Sugestões prontas para revisão, sem aplicação automática.",
@@ -58,6 +62,9 @@ STAGES = {
 }
 
 ERRORS = {
+    "INVALID_CODE_ANALYSIS": "A IA não devolveu um diagnóstico válido. O código foi preservado; solicite uma nova análise.",
+    "ANALYSIS_OUTDATED": "O código mudou depois da análise. Analise a revisão atual antes de solicitar a correção.",
+    "ANALYSIS_NOT_ACTIONABLE": "A análise não identificou uma correção de código disponível.",
     "VERIFICATION_RESUME_REQUIRED": "A verificação foi interrompida. Os recursos foram preservados; retome pelo backoffice.",
     "PUBLICATION_FRONTEND_NOT_READY": "A verificação pública do frontend não passou. Consulte os detalhes da publicação.",
     "PUBLICATION_REVISION_NOT_READY": "A revisão publicada ou o acesso ao D1 não foram confirmados.",
@@ -76,6 +83,7 @@ ERRORS = {
     "GENERATION_LIMIT": "A construção atingiu o limite de chamadas configurado antes de concluir o pedido. Nenhuma alteração parcial foi aplicada. Consulte os detalhes da falha e solicite a revisão do limite de geração.",
     "INVALID_GENERATION": "A resposta da IA não passou pela validação, mesmo após a tentativa de correção. Seu código foi preservado. Você pode tentar novamente.",
     "GENERATION_EDIT_MISMATCH": "A IA não conseguiu localizar com segurança os trechos a alterar. Seu código foi preservado. Tente novamente para reconstruir os arquivos afetados.",
+    "GENERATION_DELETE_MISMATCH": "A IA solicitou a exclusão de um arquivo que não corresponde ao estado atual do projeto. Sua revisão foi preservada. Tente novamente para corrigir a lista de arquivos afetados.",
     "DRAFT_NOT_SAVED": "Salve as alterações do rascunho antes de enviar o pedido.",
     "GENERATION_TRUNCATED": "A resposta atingiu o limite de tamanho antes de terminar. Sua revisão foi preservada. Divida o pedido em etapas menores ou solicite ao suporte a revisão do limite de geração.",
     "GENERATION_BLOCKED": "A solicitação não pôde ser concluída. Sua revisão foi preservada. Revise o pedido antes de tentar novamente.",

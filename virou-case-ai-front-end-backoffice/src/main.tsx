@@ -13,7 +13,10 @@ import { api, brl, command, date, session } from "./api";
 import "./styles.css";
 import "./admin.css";
 import { PasswordField } from "./password-field";
-import { PublicationReconcileButton } from "./publication-reconcile";
+import {
+  PublicationOperationStatus,
+  PublicationReconcileButton,
+} from "./publication-reconcile";
 import { IntegrationSettings } from "./integration-settings";
 import { Observability } from "./observability";
 import { AISettings } from "./ai-settings";
@@ -62,6 +65,11 @@ function App() {
   const [monitorRefresh, setMonitorRefresh] = useState(0);
   const [draft, setDraft] = useState<Record<string, string>>({});
   const formRef = useRef<HTMLFormElement>(null);
+  const activePublications = ops.items.some(
+    (operation) =>
+      operation.type === "publication" &&
+      ["queued", "running", "reconciling"].includes(operation.state),
+  );
   useEffect(() => {
     if (review || !formRef.current) return;
     for (const [name, value] of Object.entries(draft)) {
@@ -104,6 +112,38 @@ function App() {
       refresh().catch(setError);
     }
   }, [user?.id, tab, cursor]);
+  useEffect(() => {
+    if (!user || tab !== "operations" || !activePublications) return;
+    const controller = new AbortController();
+    let timer: ReturnType<typeof setTimeout>;
+    async function poll() {
+      const request = new AbortController();
+      const abort = () => request.abort();
+      controller.signal.addEventListener("abort", abort, { once: true });
+      const timeout = setTimeout(abort, 12000);
+      try {
+        const result = await api<Page<Operation>>(
+          "/operations" + (cursor ? "?cursor=" + cursor : ""),
+          { signal: request.signal },
+        );
+        if (!controller.signal.aborted) {
+          setOps(result);
+          setError(null);
+        }
+      } catch (failure) {
+        if (!controller.signal.aborted) setError(failure);
+      } finally {
+        clearTimeout(timeout);
+        controller.signal.removeEventListener("abort", abort);
+        if (!controller.signal.aborted) timer = setTimeout(poll, 4000);
+      }
+    }
+    timer = setTimeout(poll, 4000);
+    return () => {
+      controller.abort();
+      clearTimeout(timer);
+    };
+  }, [user?.id, tab, cursor, activePublications]);
   async function login(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
     setBusy(true);
@@ -470,7 +510,13 @@ function App() {
                       <small>{o.account_id}</small>
                       <span>{o.type}</span>
                     </td>
-                    <td>{o.state}</td>
+                    <td>
+                      {o.type === "publication" ? (
+                        <PublicationOperationStatus operation={o} />
+                      ) : (
+                        o.state
+                      )}
+                    </td>
                     <td>{o.billing_status}</td>
                     <td>
                       {o.model_label ?? "Sem modelo"}

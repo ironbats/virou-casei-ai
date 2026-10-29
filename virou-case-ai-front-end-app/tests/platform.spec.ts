@@ -1,3 +1,4 @@
+import { editorAction } from "./workspaceHelper";
 import { expect, test } from "@playwright/test";
 import type { Page } from "@playwright/test";
 import AxeBuilder from "@axe-core/playwright";
@@ -104,15 +105,17 @@ test("criação, edição, persistência, export e gate de publicação", async 
     fullPage: true,
   });
   await page.getByRole("treeitem", { name: "app.js", exact: true }).click();
-  await page.getByRole("button", { name: "Usar texto simples" }).click();
+  await editorAction(page, "Usar texto simples");
   const editor = page.locator(".code-editor");
   const old = await editor.inputValue();
   await editor.fill(old + "\nconst savedByE2E = true;\n");
-  await page.getByRole("button", { name: "Salvar revisão" }).click();
+  await page
+    .getByRole("button", { name: "Salvar revisão", exact: true })
+    .click();
   await expect(page.getByText("Revisão salva.", { exact: true })).toBeVisible();
   await page.reload();
   await page.getByRole("treeitem", { name: "app.js", exact: true }).click();
-  await page.getByRole("button", { name: "Usar texto simples" }).click();
+  await editorAction(page, "Usar texto simples");
   await expect(editor).toHaveValue(/savedByE2E/);
   await editor.fill("Edição local ainda não salva");
   const projectUrl = page.url();
@@ -122,7 +125,7 @@ test("criação, edição, persistência, export e gate de publicação", async 
   ).toBeVisible();
   await page.goto(projectUrl);
   await page.getByRole("treeitem", { name: "app.js", exact: false }).click();
-  await page.getByRole("button", { name: "Usar texto simples" }).click();
+  await editorAction(page, "Usar texto simples");
   await expect(editor).toHaveValue("Edição local ainda não salva");
   await page
     .getByRole("button", { name: "Baixar projeto", exact: true })

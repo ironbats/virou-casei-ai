@@ -266,12 +266,18 @@ def create_app(admin=False, dependencies=None):
     def me(who=Depends(actor)):
         return who
 
+    from viracase.interfaces.publication_recovery_routes import mount_publication_recovery_routes
+
+    mount_publication_recovery_routes(app, prefix, repo, actor, key, admin=admin)
+
     if not admin:
+        from viracase.interfaces.code_analysis_routes import mount_code_analysis_routes
         from viracase.interfaces.guided_routes import mount_guided_routes
         from viracase.interfaces.preparation_routes import mount_preparation_routes
 
         mount_guided_routes(app, prefix, repo, learning, generation, actor, key, version)
         mount_preparation_routes(app, prefix, repo, learning, catalog, actor, key)
+        mount_code_analysis_routes(app, prefix, repo, catalog, generation, actor, key)
 
         @app.get(prefix + "/offer")
         def offer():
@@ -305,6 +311,10 @@ def create_app(admin=False, dependencies=None):
                     if k.startswith("max_") or k in {"autosave_ms", "selection_debounce_ms"}
                 },
                 "generation": {
+                    "enabled": enabled,
+                    "reason_code": None if enabled else "COMMERCIAL_CONFIGURATION_PENDING",
+                },
+                "code_analysis": {
                     "enabled": enabled,
                     "reason_code": None if enabled else "COMMERCIAL_CONFIGURATION_PENDING",
                 },

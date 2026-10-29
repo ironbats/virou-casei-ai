@@ -655,3 +655,52 @@ dialog.proposal-review.expanded {
     min-height: 36px;
   }
 }
+
+.proposal-migration-history {
+  margin-top: 10px;
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+.proposal-migration-history summary {
+  cursor: pointer;
+  min-height: 32px;
+  padding: 6px 0;
+  font-weight: 600;
+}
+.proposal-migration-lists {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  max-height: 130px;
+  overflow: auto;
+}
+.proposal-migration-lists h3 {
+  font-size: 12px;
+  margin: 4px 0;
+}
+.proposal-migration-lists ul {
+  margin: 4px 0;
+  padding-left: 18px;
+}
+.proposal-migration-history > p {
+  margin: 6px 0 0;
+}
+@media (max-width: 600px) {
+  .proposal-migration-lists {
+    grid-template-columns: minmax(0, 1fr);
+    max-height: 110px;
+    gap: 4px;
+  }
+}
+
+.migration-history-error {
+  color: var(--error);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+  padding: 10px 0;
+}
+.migration-history-error ul {
+  max-height: 120px;
+  overflow: auto;
+  padding-left: 18px;
+}

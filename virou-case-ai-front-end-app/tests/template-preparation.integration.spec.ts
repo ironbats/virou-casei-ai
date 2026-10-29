@@ -128,7 +128,14 @@ test("seleção integra catálogo, autofill, worker, recarga, revisão e snapsho
   await page
     .getByRole("button", { name: "Enviar para construir", exact: true })
     .click();
-  await expect(page.getByText("Etapa 1 de 3")).toBeVisible();
+  await expect(
+    page.getByText("Preparação concluída", { exact: true }),
+  ).toBeVisible();
+  const submittedDraft = await page.request.get(
+    `/api/v1/projects/${project.id}/build-draft`,
+  );
+  expect(submittedDraft.ok()).toBe(true);
+  expect((await submittedDraft.json()).data.stage).toBe("conversation");
   await expect(page.locator(".build-turn").last()).toHaveAttribute(
     "data-state",
     "succeeded",

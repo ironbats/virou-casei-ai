@@ -1,6 +1,8 @@
 import json
 import re
 import time
+import unicodedata
+from pathlib import PurePosixPath
 from urllib.parse import urlsplit
 from uuid import uuid4
 
@@ -8,7 +10,10 @@ import httpx
 
 from viracase.domain.rules import RuleError, utcnow
 from viracase.infrastructure.publication_build_diagnostics import BuildFailure
+from viracase.infrastructure.publication_d1_diagnostics import sanitize_provider_diagnostic
 from viracase.infrastructure.publication_logging import emit, safe_text
+from viracase.infrastructure.publication_migrations import MESSAGES as MIGRATION_MESSAGES
+from viracase.infrastructure.publication_sql_review import ANALYSIS_METHOD, review_evidence
 
 VERIFICATION_FORMAT_VERSION = 2
 
@@ -233,6 +238,78 @@ class RemoteVerifier:
         return {"code": "API_CONFIRMED", "passed": True}
 
 
+def migration_diagnostic(value, secrets=()):
+    if (
+        not isinstance(value, dict) or not isinstance(value.get("code"), str)
+        or value["code"] not in MIGRATION_MESSAGES
+    ):
+        return None
+    issues = value.get("issues")
+    if not isinstance(issues, list):
+        return None
+    clean = []
+    reasons = {
+        "checksum_changed", "missing_file", "receipt_conflict", "receipt_missing",
+        "pending_receipt_missing", "pending_receipt_conflict", "unsafe_sql", "invalid_receipt",
+        "sql_syntax_error", "missing_table", "missing_column", "duplicate_column", "object_exists",
+        "incomplete_sql", "empty_sql", "constraint_failed", "sql_rejected", "foreign_key_violation",
+        "baseline_not_replayable", "validation_limit", "validation_limit_or_schema_error",
+        "execution_evidence_missing", "schema_changed_after_execution",
+        "insert_before_history",
+    }
+    for issue in issues[:12]:
+        if (
+            not isinstance(issue, dict)
+            or not all(isinstance(issue.get(key), str) for key in ("code", "reason", "receipt_source"))
+            or issue.get("code") not in MIGRATION_MESSAGES
+            or issue.get("reason") not in reasons
+            or issue.get("receipt_source") not in {"inventory", "remote", "candidate", "baseline"}
+        ):
+            continue
+        message, hint = MIGRATION_MESSAGES[issue["code"]]
+        if issue["reason"] == "receipt_conflict":
+            hint = "Confira a divergência entre o inventário e o recibo remoto. Não altere checksums nem repita a migration."
+        item = {
+            "code": issue["code"], "reason": issue["reason"],
+            "receipt_source": issue["receipt_source"], "message": message, "hint": hint,
+        }
+        path = issue.get("path")
+        if (
+            isinstance(path, str) and len(path) <= 180
+            and path.startswith("migrations/") and path.endswith(".sql")
+            and "\\" not in path and ":" not in path
+            and not any(part in {"", ".", ".."} for part in path.split("/"))
+            and "/".join(PurePosixPath(path).parts) == path
+            and not any(unicodedata.category(char) in {"Cc", "Cf"} for char in path)
+            and safe_text(path, secrets, limit=181) == path
+        ):
+            item["path"] = path
+        for key in ("expected_sha256", "actual_sha256"):
+            digest = issue.get(key)
+            if isinstance(digest, str) and re.fullmatch(r"[0-9a-f]{64}", digest):
+                item[key] = digest
+            elif key == "actual_sha256" and key in issue and digest is None:
+                item[key] = None
+        if type(issue.get("statement_index")) is int and 1 <= issue["statement_index"] <= 2000:
+            item["statement_index"] = issue["statement_index"]
+        if issue["reason"] == "unsafe_sql" and issue["code"] == "MIGRATION_REVIEW_REQUIRED":
+            item.update(review_evidence(issue))
+        clean.append(item)
+    if not clean:
+        return None
+    count = value.get("issue_count")
+    result = {
+        "format_version": 1, "category": "migration", "code": value["code"], "issues": clean,
+        "issue_count": max(len(clean), min(count, 1000)) if type(count) is int else len(clean),
+    }
+    if value.get("analysis_method") == ANALYSIS_METHOD and any("operation" in item for item in clean):
+        result["analysis_method"] = ANALYSIS_METHOD
+    revision = value.get("published_revision_id")
+    if isinstance(revision, str) and re.fullmatch(r"[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}", revision):
+        result["published_revision_id"] = revision
+    return result
+
+
 def failure_record(exc, stage, stack=None, secrets=()):
     record = {
         "code": exc.code if isinstance(exc, RuleError) else "PUBLICATION_VERIFICATION_FAILED",
@@ -247,9 +324,13 @@ def failure_record(exc, stage, stack=None, secrets=()):
         record["details"] = exc.diagnostic
     if isinstance(exc, BuildFailure):
         record["build"] = exc.diagnostic
+    if isinstance(exc, RuleError):
+        migration = migration_diagnostic(exc.details.get("migration"), secrets)
+        if migration:
+            record["migration"] = migration
     provider = getattr(exc, "provider_diagnostic", None)
     if isinstance(provider, dict):
-        record["provider"] = provider
+        record["provider"] = sanitize_provider_diagnostic(provider)
     return record
 
 

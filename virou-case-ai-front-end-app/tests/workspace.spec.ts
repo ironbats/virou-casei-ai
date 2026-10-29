@@ -11,7 +11,13 @@ test.skip(
   "Use backend/script/test-workspace.py para iniciar o laboratório de construção.",
 );
 
-import { reviewRequest, showBuildHistory, workspace } from "./workspaceHelper";
+import {
+  projectAction,
+  editorAction,
+  reviewRequest,
+  showBuildHistory,
+  workspace,
+} from "./workspaceHelper";
 
 async function send(page: Page, request: string) {
   await reviewRequest(page, request);
@@ -60,7 +66,7 @@ test("pedido, progresso real, aplicação revisada e histórico após recarga", 
   await expect(page.locator(".build-turn").last()).toContainText(
     "Melhorar o título e o conteúdo da página inicial",
   );
-  await page.getByRole("button", { name: "Usar texto simples" }).click();
+  await editorAction(page, "Usar texto simples");
   await expect(page.locator(".code-editor")).toHaveValue(/Alteração E2E/);
   await page.screenshot({
     path: info.outputPath("construction-complete.png"),
@@ -133,7 +139,7 @@ test("edição em outra sessão durante construção preserva rascunho e exige c
   await expect(turn).toHaveAttribute("data-state", "succeeded");
   await expect(turn).toContainText("mudou durante a geração");
   await page.reload();
-  await page.getByRole("button", { name: "Usar texto simples" }).click();
+  await editorAction(page, "Usar texto simples");
   await expect(page.locator(".code-editor")).toHaveValue(
     /Minha edição local não pode ser perdida/,
   );
@@ -227,7 +233,7 @@ test("conversa acessível em mobile, tablet e desktop sem overflow", async ({
   for (const width of [320, 375, 768, 1024, 1440]) {
     await page.setViewportSize({ width, height: 900 });
     if (width <= 900)
-      await page.getByRole("tab", { name: "Construção", exact: true }).click();
+      await page.getByRole("tab", { name: "Chat", exact: true }).click();
     await expect(page.locator(".guided-build")).toBeVisible();
     expect(
       await page.evaluate(
@@ -253,7 +259,7 @@ test("conversa acessível em mobile, tablet e desktop sem overflow", async ({
       });
   }
   await page.setViewportSize({ width: 375, height: 900 });
-  await page.getByRole("tab", { name: "Construção", exact: true }).click();
+  await page.getByRole("tab", { name: "Chat", exact: true }).click();
   const audit = await new AxeBuilder({ page })
     .include(".ide-layout")
     .withTags(["wcag2a", "wcag2aa"])
@@ -309,7 +315,7 @@ test("guia SDD, edição manual, recarga e transferência sem gerar IA", async (
   page.on("request", (r) => {
     if (r.method() === "POST" && r.url().includes("/messages")) generations++;
   });
-  await page.getByRole("link", { name: "Explorar guias" }).click();
+  await projectAction(page, "Explorar guias");
   await expect(page.locator(".guide-card")).toHaveCount(14);
   await page.getByRole("tab", { name: "2 Adapte" }).click();
   await page
@@ -378,7 +384,7 @@ test("guia SDD, edição manual, recarga e transferência sem gerar IA", async (
   );
   await page.getByRole("button", { name: "Fechar", exact: true }).click();
   expect(generations).toBe(0);
-  await page.getByRole("link", { name: "Explorar guias" }).click();
+  await projectAction(page, "Explorar guias");
   await page.getByRole("tab", { name: "3 Aplique" }).click();
   await page
     .getByRole("button", { name: "Levar rascunho para o projeto" })
@@ -477,7 +483,7 @@ test("editor com destaque, abas e teclado preserva conteúdo", async ({
   page,
 }, info) => {
   await workspace(page);
-  await page.getByRole("button", { name: "Editor com destaque" }).click();
+  await editorAction(page, "Editor com destaque");
   await expect(page.locator(".cm-lineNumbers")).toBeVisible();
   await page.getByRole("treeitem", { name: "app.js", exact: true }).click();
   await expect(page.locator(".cm-content")).toHaveAttribute(
@@ -509,7 +515,7 @@ test("editor com destaque, abas e teclado preserva conteúdo", async ({
     path: info.outputPath("editor-highlighted.png"),
     fullPage: true,
   });
-  await page.getByRole("button", { name: "Usar texto simples" }).click();
+  await editorAction(page, "Usar texto simples");
   await page.locator(".code-editor").fill(before);
   await expect(
     page.getByText("Rascunho salvo", { exact: false }).first(),
@@ -566,7 +572,7 @@ test("pergunta de esclarecimento, resposta curta e aplicação com contexto", as
   await expect(answered.locator(".build-request")).toContainText("sim");
   await expect(answered).toHaveAttribute("data-state", "succeeded");
   await apply(page, answered);
-  await page.getByRole("button", { name: "Usar texto simples" }).click();
+  await editorAction(page, "Usar texto simples");
   await expect(page.locator(".code-editor")).not.toHaveValue(original);
   expect(
     await page.evaluate(

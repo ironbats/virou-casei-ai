@@ -3,6 +3,7 @@ import { command } from "./api";
 import { ErrorNotice } from "./admin-ui";
 import type { Connection } from "./integration-types";
 import { PublicationVerificationStatus } from "./publication-verification-status";
+import { AutomaticPublicationStatus } from "./automatic-publication-status";
 import {
   usePublicationDiagnostics,
   type PublicationDiagnosticsRemote,
@@ -53,6 +54,11 @@ export function PublicationDiagnosticsPanel({
         (!data.workers.length ||
           !data.workers.every((worker) => worker.available))));
   const diagnosticText = data ? JSON.stringify(data, null, 2) : "";
+  const automaticallyPending =
+    data?.automatic_verification?.enabled &&
+    ["scheduled", "queued", "running", "retry_wait"].includes(
+      data.automatic_verification.state,
+    );
   const disabled =
     !data ||
     busy ||
@@ -70,7 +76,7 @@ export function PublicationDiagnosticsPanel({
         <div>
           <h3>Verificação da publicação</h3>
           <p className="field-help">
-            Acompanhe o resultado e verifique os perfis desta conexão.
+            Acompanhe a conexão e os perfis disponíveis para publicação.
           </p>
         </div>
         <button
@@ -95,8 +101,17 @@ export function PublicationDiagnosticsPanel({
             ? data.stack_readiness?.some((profile) => !profile.can_publish)
               ? "Publicação liberada para os perfis aprovados abaixo."
               : "Publicação liberada para esta conexão."
-            : "Publicação bloqueada: resolva os itens abaixo."}
+            : automaticallyPending
+              ? "A publicação aguarda a verificação automática. O estado será atualizado aqui."
+              : "Publicação bloqueada: resolva os itens abaixo."}
       </p>
+      {data && (
+        <p className="field-help">
+          Esta verificação valida a conexão e os perfis. A preparação do código,
+          as migrations e o resultado de cada projeto são conferidos na própria
+          publicação.
+        </p>
+      )}
       {!!data?.reasons.length && (
         <ul className="cloudflare-reasons">
           {data.reasons.map((item) => (
@@ -130,6 +145,10 @@ export function PublicationDiagnosticsPanel({
           ))}
         </ul>
       )}
+      <AutomaticPublicationStatus
+        verification={data?.automatic_verification}
+        canPublish={!!data?.can_publish}
+      />
       {data?.verification && (
         <PublicationVerificationStatus verification={data.verification} />
       )}
@@ -173,6 +192,8 @@ export function PublicationDiagnosticsPanel({
               : "Executar verificação"}
         </h3>
         <p className="field-help">
+          {data?.automatic_verification?.enabled &&
+            "A renovação automática está habilitada e não exige verificações manuais. Use esta ação para antecipar uma conferência. "}
           O resultado é atualizado automaticamente. Workers e bancos D1 de
           verificação são preservados na Cloudflare.
         </p>

@@ -15,6 +15,7 @@ from viracase.infrastructure.publication import PublicationService
 from viracase.infrastructure.publication_lifecycle import purge_publications
 from viracase.infrastructure.publication_qualification import REQUIRED_CHECKS, record_qualification
 from viracase.infrastructure.publication_reconcile import reconcile_publication
+from viracase.infrastructure.publication_sql_review import split_sql_statements
 from viracase.infrastructure.publication_worker import execute_publication
 from viracase.infrastructure.worker import Worker
 
@@ -86,13 +87,16 @@ class Remote:
             ]
         if sql.startswith("INSERT INTO __viroucaseai_migrations"):
             self.receipts[params[0]] = params[1]
-        return [{"success": True, "results": []}]
+        return [{"success": True, "results": []} for _ in split_sql_statements(sql)]
 
     def upload(self, name, database_id, artifact):
         self.calls.append("upload")
         self.remote = {
             "tags": ["viroucaseai", artifact["revision_id"]],
-            "bindings": [{"type": "d1", "name": "DB", "id": database_id}],
+            "bindings": [
+                {"type": "d1", "name": "DB", "id": database_id},
+                {"type": "assets", "name": "ASSETS"},
+            ],
         }
         if self.mode == "upload_uncertain":
             raise PublicationUncertain()
@@ -245,7 +249,7 @@ def test_credentials_encrypted_and_rotation_invalidates_readiness(publication, s
 
 
 def test_publish_durable_idempotent_and_url_only_after_verification(publication, system):
-    registry, service, actor, project = publication
+    _registry, service, actor, project = publication
     before = system["repo"].wallet(actor, True)
     op = start(system, publication)
     duplicate = service.start(

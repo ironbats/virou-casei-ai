@@ -9,6 +9,43 @@ publication_compose() {
   docker compose "${PUBLICATION_COMPOSE_ARGS[@]}" "$@"
 }
 
+publication_build_images() (
+  umask 077
+  local build_workspace build_log build_status capture_status
+  local -a pipeline_status
+  if ! build_workspace="$(mktemp -d "${TMPDIR:-/tmp}/viracase-build.XXXXXXXX")"; then
+    publication_fail 'DOCKER_BUILD_LOG_FAILED: nao foi possivel preparar o diagnostico temporario do build. Nenhum container foi recriado por esta etapa.'
+    return 1
+  fi
+  build_log="$build_workspace/build.log"
+  trap 'rm -f -- "$build_log"; rmdir -- "$build_workspace"' EXIT
+  trap 'exit 130' INT
+  trap 'exit 143' TERM
+  printf '%s\n' 'Etapa de build: preparando as imagens antes de iniciar ou recriar os servicos.'
+  if publication_compose build "$@" 2>&1 | tee "$build_log"; then
+    pipeline_status=("${PIPESTATUS[@]}")
+  else
+    pipeline_status=("${PIPESTATUS[@]}")
+  fi
+  build_status="${pipeline_status[0]}"
+  capture_status="${pipeline_status[1]}"
+  if [[ "$capture_status" != 0 ]]; then
+    printf '%s\n' 'DOCKER_BUILD_LOG_FAILED: a captura do diagnostico falhou; a inicializacao foi interrompida.' >&2
+    if [[ "$build_status" == 0 ]]; then return 1; fi
+  fi
+  if [[ "$build_status" != 0 ]]; then
+    if LC_ALL=C grep -Eiq '(failed to (solve|resolve source metadata|do request|fetch [^:]+ token)|error response from daemon)[^[:cntrl:]]*lookup[^[:cntrl:]]+(server misbehaving|no such host|i/o timeout|temporary failure|connection refused|network is unreachable)' "$build_log"; then
+      printf '%s\n' 'DOCKER_BUILD_DNS_FAILED: o daemon ou builder nao conseguiu resolver um nome necessario ao build.' >&2
+      printf '%s\n' 'Confira o DNS no ambiente que executa o Docker/BuildKit. Para coletar um diagnostico sem alterar a configuracao, execute: bash script/diagnose-docker-build.sh' >&2
+    else
+      printf '%s\n' 'DOCKER_BUILD_FAILED: a construcao da imagem falhou. O erro original do Docker foi exibido acima.' >&2
+    fi
+    printf '%s\n' 'A etapa de inicializacao nao foi executada. Nenhum container foi recriado por esta etapa; confira o estado dos servicos existentes com docker compose ps.' >&2
+    return "$build_status"
+  fi
+  printf '%s\n' 'Build concluido. Iniciando a etapa de aplicacao das imagens aos servicos.'
+)
+
 publication_prepare_compose() {
   command -v docker >/dev/null || { publication_fail 'Docker nao encontrado.'; return 1; }
   docker compose version >/dev/null || return 1

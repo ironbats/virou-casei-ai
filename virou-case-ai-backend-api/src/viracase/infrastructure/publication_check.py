@@ -122,6 +122,21 @@ def request_check(repo, actor, identity, key, version, reason):
 
 
 def execute_check(worker, oid, token, gateway_factory=CloudflareGateway, builder=None):
+    from viracase.infrastructure.publication_maintenance import update_automatic_verification
+
+    update_automatic_verification(worker.repo, oid, token, starting=True)
+    try:
+        result = _execute_check(worker, oid, token, gateway_factory, builder)
+    except Exception as exc:
+        update_automatic_verification(worker.repo, oid, token, error=exc)
+        raise
+    update_automatic_verification(worker.repo, oid, token)
+    return result
+
+
+def _execute_check(worker, oid, token, gateway_factory=CloudflareGateway, builder=None):
+    from viracase.infrastructure.publication_maintenance import TRANSIENT_FAILURES
+
     repo, builder = worker.repo, builder or IsolatedBuild()
     registry = Integrations(repo)
     current_stage, current_stack = "verification_initializing", None
@@ -156,9 +171,10 @@ def execute_check(worker, oid, token, gateway_factory=CloudflareGateway, builder
         cfg = db.get(IntegrationConfig, op.policy["config_id"])
         policy, secret = dict(cfg.settings), registry.vault.decrypt(cfg.id, cfg.credential)
         config_id, actor, connection_id = cfg.id, op.account_id, op.payload["connection_id"]
+        automatic = op.payload.get("automatic") is True
         evidence = dict(op.result)
         current = registry.latest(db, "cloudflare", connection_id=connection_id)
-        changed = not current or current.id != cfg.id
+        changed = not current or current.id != cfg.id or current.state not in {"active", "validated"}
     gateway = gateway_factory(policy, secret)
 
     def renew(method):
@@ -166,6 +182,11 @@ def execute_check(worker, oid, token, gateway_factory=CloudflareGateway, builder
             job = db.scalar(select(Job).where(Job.operation_id == oid).with_for_update())
             if job.lease_token != token:
                 raise RuleError("LEASE_LOST", "Verificação assumida por outra execução.")
+            current = registry.latest(db, "cloudflare", connection_id=connection_id)
+            if not current or current.id != config_id or current.state not in {"active", "validated"}:
+                raise RuleError("VERSION_CONFLICT", "A conexão mudou durante a verificação.")
+            if repo.config.restore_hold or not repo.config.lifecycle_enabled:
+                raise RuleError("LIFECYCLE_LOCKED", "A verificação aguarda o término da manutenção.")
             job.lease_until = utcnow() + timedelta(minutes=15)
 
     gateway.before_request = renew
@@ -189,7 +210,10 @@ def execute_check(worker, oid, token, gateway_factory=CloudflareGateway, builder
     def record_failure(exc):
         nonlocal failure
         detail = failure_record(exc, current_stage, current_stack, (secret,))
-        if failure is None:
+        if failure is None or (
+            automatic and isinstance(failure, RuleError) and failure.code in TRANSIENT_FAILURES
+            and (not isinstance(exc, RuleError) or exc.code not in TRANSIENT_FAILURES)
+        ):
             failure = exc
             persist({"verification_failure": detail})
         emit("publication_check_failed", "error", operation_id=oid, stage=current_stage,
@@ -205,6 +229,8 @@ def execute_check(worker, oid, token, gateway_factory=CloudflareGateway, builder
         )
         if changed:
             raise RuleError("VERSION_CONFLICT", "A conexão mudou. Os recursos de diagnóstico foram preservados.")
+        if repo.config.restore_hold or not repo.config.lifecycle_enabled:
+            raise RuleError("LIFECYCLE_LOCKED", "A verificação aguarda o término da manutenção.")
         checks.update(builder.verify_isolation())
         expected_local = CHECKS - {"remote_read_write", "binding_isolation", "resource_retention"}
         if set(checks) != expected_local or not all(value is True for value in checks.values()):
@@ -215,7 +241,8 @@ def execute_check(worker, oid, token, gateway_factory=CloudflareGateway, builder
         stage("verification_configuration")
         validation = gateway.validate()
         if not validation.get("ready"):
-            raise RuleError("CONFIGURATION_INVALID", "A conexão Cloudflare não passou na verificação.")
+            raise RuleError(validation.get("code", "CONFIGURATION_INVALID"),
+                            "A conexão Cloudflare não passou na verificação.")
         known_databases = set(validation.get("database_ids", []))
         workers_count = validation.get("workers_count", 100)
         for stack in policy["allowed_stacks"]:
@@ -332,9 +359,11 @@ def execute_check(worker, oid, token, gateway_factory=CloudflareGateway, builder
             current = registry.latest(db, "cloudflare", connection_id=connection_id)
             if current and current.id == config_id:
                 current.validation = {
-                    **current.validation, "database_ids": sorted(known_databases),
+                    **current.validation, **validation, "checked_at": utcnow().isoformat(),
+                    "database_ids": sorted(known_databases),
                     "databases_count": len(known_databases), "workers_count": workers_count,
                 }
+                current.validated_at = utcnow()
     if not tested:
         if failure:
             raise failure
@@ -359,13 +388,20 @@ def execute_check(worker, oid, token, gateway_factory=CloudflareGateway, builder
             "expires_at": (utcnow() + timedelta(hours=policy["validation_hours"])).isoformat(),
             "operation_id": oid, "resource_policy": "retain",
         }
-        current.validation = {
-            **current.validation, "publication_check_blocked": False,
-            "publication_check_blocked_stacks": [stack for stack in policy["allowed_stacks"] if stack not in tested],
-            "database_ids": sorted(known_databases), "databases_count": len(known_databases),
-            "workers_count": workers_count,
-            "runtime_verification": {"report": report, "digest": canonical_hash(report)},
-        }
+        from viracase.infrastructure.publication_qualification import qualified
+
+        preserve = bool(
+            automatic and isinstance(failure, RuleError) and failure.code in TRANSIENT_FAILURES
+            and all(qualified(current, stack, fingerprint) for stack in policy["allowed_stacks"])
+        )
+        if not preserve:
+            current.validation = {
+                **current.validation, "publication_check_blocked": False,
+                "publication_check_blocked_stacks": [stack for stack in policy["allowed_stacks"] if stack not in tested],
+                "database_ids": sorted(known_databases), "databases_count": len(known_databases),
+                "workers_count": workers_count,
+                "runtime_verification": {"report": report, "digest": canonical_hash(report)},
+            }
         op.state, job.state = ("failed" if failure else "succeeded"), "done"
         op.error_code = failure.code if isinstance(failure, RuleError) else "PUBLICATION_VERIFICATION_FAILED" if failure else None
         record_progress(op, "verification_partial" if failure else "verification_complete")

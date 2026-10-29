@@ -25,6 +25,7 @@ from viracase.domain.rules import (
 from viracase.infrastructure.models import (
     Account,
     Attempt,
+    Draft,
     Grant,
     Idempotency,
     Job,
@@ -71,8 +72,10 @@ class Repository(RepositoryAdmin):
         if action:
             value.authorize(action, now)
         actions = []
-        for candidate in ("read", "export", "write", "generate", "learn", "publish"):
+        for candidate in ("read", "export", "write", "generate", "learn", "publish", "recover_own_publication_no_effect"):
             try:
+                if candidate == "recover_own_publication_no_effect" and a.role != "student":
+                    continue
                 value.authorize(candidate, now)
                 actions.append(candidate)
             except RuleError:
@@ -298,7 +301,17 @@ class Repository(RepositoryAdmin):
         return self.mutate(actor, f"edit:{pid}", key, {**payload, "version": version}, command, "write")
 
     def add_revision(self, db, p, files, origin, base, proposal=False):
+        from viracase.domain.rules import validate_file_entries
+        from viracase.infrastructure.publication_migration_context import validate_revision_migrations
+
+        if p.current_revision_id and base is None:
+            raise RuleError("VERSION_CONFLICT", "Informe a revisão-base consolidada antes de salvar novos arquivos.", 412)
+        validate_file_entries(files, self.sources.secrets)
         rid = new_id()
+        migration_evidence = validate_revision_migrations(
+            self, db, p, files, base_revision_id=base, revision_id=rid,
+            operation="proposal" if proposal else origin,
+        )
         digest = self.sources.write(p.account_id, p.id, rid, files, p.stack)
         manifest = [
             {"id": sha256(name.encode()).hexdigest()[:24], "path": name, "size": len(content.encode())}
@@ -315,9 +328,11 @@ class Repository(RepositoryAdmin):
             candidate=candidate,
         )
         db.add(r)
+        db.add(Draft(account_id=p.account_id, kind="migration_plan", target=rid, data=migration_evidence))
         if not candidate:
             p.current_revision_id, p.version = rid, p.version + 1
         db.flush()
+        r.migration_evidence = migration_evidence
         return r
 
     def save_revision(self, actor, pid, key, payload, version):
@@ -341,7 +356,7 @@ class Repository(RepositoryAdmin):
                 "restore" if payload.get("restore_revision_id") else "edit",
                 payload.get("base_revision_id"),
             )
-            return {"revision": revision_dto(r), "project": project_dto(p)}
+            return {"revision": revision_dto(r), "project": project_dto(p), **r.migration_evidence}
 
         return self.mutate(actor, f"revision:{pid}", key, {**payload, "version": version}, command, "write")
 
@@ -391,12 +406,18 @@ class Repository(RepositoryAdmin):
     def create_operation(self, actor, pid, kind, key, payload, policy=None, ceiling=None):
         def command(db, a):
             p = self.owned_project(db, actor, pid)
+            if kind == "generation" and payload.get("analysis_id"):
+                from viracase.infrastructure.code_analysis import validate_correction
+
+                previous = validate_correction(self, db, actor, p, payload)
+                if previous:
+                    return operation_dto(previous)
             if kind in {"preview", "publication"}:
                 raise RuleError(
                     "CAPABILITY_UNVALIDATED",
                     "Isolamento, execução e publicação ainda aguardam validação operacional.",
                 )
-            if kind in {"generation", "template_preparation"}:
+            if kind in {"generation", "template_preparation", "code_analysis"}:
                 if kind == "template_preparation":
                     from viracase.infrastructure.template_preparations import TemplatePreparations
 
@@ -409,9 +430,13 @@ class Repository(RepositoryAdmin):
                     raise RuleError(
                         "RECOVERY_HOLD", "Operações pausadas para reconciliação após restauração."
                     )
-                if payload.get("base_revision_id") != p.current_revision_id:
+                if kind == "code_analysis":
+                    revision = self.owned_revision(db, actor, pid, payload["revision_id"])
+                    if revision.source_hash != payload["source_hash"]:
+                        raise RuleError("ANALYSIS_OUTDATED", "A fonte não corresponde à revisão analisada.", 409)
+                elif payload.get("base_revision_id") != p.current_revision_id:
                     raise RuleError("VERSION_CONFLICT", "A revisão base mudou.", 412)
-                if kind == "generation":
+                if kind == "generation" and not payload.get("analysis_id"):
                     choose_stack(payload["brief"])
                 if db.scalar(
                     select(Operation.id).where(
@@ -435,6 +460,15 @@ class Repository(RepositoryAdmin):
                 prepare_turn(self, db, op, p)
             db.add(op)
             db.flush()
+            if kind == "code_analysis":
+                from viracase.infrastructure.code_analysis import analysis_reference
+
+                op.result = analysis_reference(payload)
+            elif kind == "generation" and payload.get("analysis_id"):
+                from viracase.infrastructure.code_analysis import owned_analysis
+
+                analysis = owned_analysis(db, actor, pid, payload["analysis_id"])
+                analysis.result = {**analysis.result, "correction_operation_id": op.id}
             if kind == "template_preparation" and payload.get("automatic_apply"):
                 from viracase.infrastructure.drafts import Drafts
                 import copy
@@ -449,12 +483,14 @@ class Repository(RepositoryAdmin):
                         attachment.update(preparation_id=op.id, fill_state="queued")
                 drafts.write(db, actor, "build", pid, row.version, data)
             record_progress(op, "queued")
+            if kind == "code_analysis":
+                record_progress(op, "analysis_queued")
             if kind == "generation" and payload.get("attachment_snapshots"):
                 from viracase.infrastructure.integration_traces import TraceStore, trace_context
 
                 fields = [{"attachment_id": item["source_template_id"], "field_id": field_id, "final_value": value, "source_type": item.get("field_values", {}).get(field_id, {}).get("source_type", "user_edit"), "state": "snapshot", "attachment_revision": item.get("attachment_revision"), "snapshot_id": item["id"]} for item in payload["attachment_snapshots"] for field_id, value in item.get("fields", {}).items()]
                 TraceStore(self).put(trace_context(self, op, "construction"), "fields", "snapshot", {"fields": {"items": fields}}, db=db)
-            if kind in {"generation", "template_preparation"}:
+            if kind in {"generation", "template_preparation", "code_analysis"}:
                 grants = db.scalars(
                     select(Grant)
                     .where(
@@ -484,7 +520,7 @@ class Repository(RepositoryAdmin):
             actor,
             f"guided-send:{pid}" if payload.get("guided_request") else f"{kind}:{pid}",
             key,
-            payload.get("preparation_request", payload.get("guided_request", payload.get("reply_request", payload))),
+            payload.get("analysis_request", payload.get("preparation_request", payload.get("guided_request", payload.get("reply_request", payload)))),
             command,
             "export" if kind == "export" else "generate",
         )

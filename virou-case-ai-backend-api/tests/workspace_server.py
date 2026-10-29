@@ -105,6 +105,12 @@ class WorkspaceGateway:
         self.realistic_preparation = RealisticPreparationGateway(config)
 
     def generate(self, policy, prompt):
+        if os.environ.get("VIRA_E2E_CODE_ANALYSIS") == "true" and not policy.get("template_preparation_contract"):
+            from code_analysis_fixture import code_analysis_result
+
+            result = code_analysis_result(policy, prompt)
+            if result is not None:
+                return result
         if policy.get("template_preparation_contract"):
             from test_template_preparations import PreparationGateway
 
@@ -317,6 +323,10 @@ class WorkspaceGateway:
 
 gateway = WorkspaceGateway()
 catalog = ModelCatalog(config)
+if os.environ.get("VIRA_E2E_CORRECTION_FOLLOWUP") == "true":
+    from correction_followup_fixture import seed_correction_followup
+
+    seed_correction_followup(repo, account.id)
 if os.environ.get("VIRA_E2E_BUILD_DIAGNOSTIC") == "true":
     from publication_diagnostic_fixture import seed_publication_build_failure
 

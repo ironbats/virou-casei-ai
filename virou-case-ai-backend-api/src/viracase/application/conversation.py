@@ -55,12 +55,15 @@ def context_input_bound(policy, payload, input_tokens=0):
     return max(0, min(context_limit + INPUT_OVERHEAD, context_input_budget(policy) - input_tokens))
 
 
-def context_prompt(instruction, context, input_bound=INPUT_BOUND, request_limit_bytes=None):
+def context_prompt(instruction, context, input_bound=INPUT_BOUND, request_limit_bytes=None, *, code_context_keys=()):
     prompt = instruction + json.dumps(context, ensure_ascii=False)
     context_bytes = len(prompt.encode())
     if request_limit_bytes is not None:
         request_bytes = len(
-            (instruction + json.dumps({**context, "files": {}}, ensure_ascii=False)).encode()
+            (instruction + json.dumps(
+                {**context, "files": {}, **{key: {} for key in code_context_keys if key in context}},
+                ensure_ascii=False,
+            )).encode()
         )
         if request_bytes > request_limit_bytes:
             raise RuleError(
@@ -118,6 +121,8 @@ def prompt_for(
     request_limit_bytes=None,
     max_batches=MAX_BATCHES,
     character_budget=None,
+    protected_migrations=None,
+    feedback=None,
 ):
     if character_budget is None:
         character_budget = max(500, min(24000, output_tokens * (1 if smaller else 2)))
@@ -138,6 +143,12 @@ def prompt_for(
     )
     if smaller:
         instruction += "O lote anterior foi cortado e descartado. Priorize uma alteração pequena e completa neste lote.\n"
+    instruction += (
+        "Migrations indicadas em protected_migrations pertencem à revisão-base consolidada, ainda que nunca publicadas. "
+        "Não altere, remova, renomeie nem reformate esses arquivos; crie uma nova migration incremental para evoluir o banco.\n"
+    )
+    if feedback:
+        instruction += "O último lote foi descartado por validation_feedback. Corrija somente o problema indicado usando os arquivos atuais.\n"
     return context_prompt(
         instruction,
         {
@@ -147,6 +158,8 @@ def prompt_for(
             "batch": batch + 1,
             "batches_remaining": max_batches - batch,
             "files": files,
+            "protected_migrations": protected_migrations or [],
+            **({"validation_feedback": feedback} if feedback else {}),
         },
         input_bound,
         request_limit_bytes,

@@ -8,12 +8,53 @@ export type PublicationReadiness = {
   revision_id: string | null;
   configuration_version: number | null;
   reasons: { code: string; message: string }[];
+  automatic_verification?: {
+    enabled: boolean;
+    state:
+      | "disabled"
+      | "waiting_configuration"
+      | "waiting_executor"
+      | "waiting_lifecycle"
+      | "scheduled"
+      | "queued"
+      | "running"
+      | "retry_wait"
+      | "attention";
+    message: string;
+    next_attempt_at: string | null;
+    last_attempt_at: string | null;
+    last_succeeded_at: string | null;
+    last_error_code: string | null;
+    consecutive_failures: number;
+  };
   publication: {
     url?: string;
     revision_id?: string;
     published_at?: string;
   } | null;
 };
+
+export function automaticVerificationMessage(
+  readiness: PublicationReadiness | null,
+) {
+  const verification = readiness?.automatic_verification;
+  if (!verification?.enabled || !verification.message) return "";
+  const connectionBlocked = readiness?.reasons.some((reason) =>
+    [
+      "CONFIGURATION_PENDING",
+      "CONFIGURATION_INVALID",
+      "CAPABILITY_UNVALIDATED",
+      "EXECUTOR_UNAVAILABLE",
+      "LIFECYCLE_LOCKED",
+    ].includes(reason.code),
+  );
+  return connectionBlocked ||
+    ["queued", "running", "retry_wait", "attention"].includes(
+      verification.state,
+    )
+    ? verification.message
+    : "";
+}
 
 export function publicationUrl(value?: string) {
   if (!value) return null;
@@ -37,11 +78,13 @@ export function usePublicationReadiness(
   const [error, setError] = useState<unknown>(null);
   const [loading, setLoading] = useState(true);
   const [refreshKey, setRefreshKey] = useState(0);
+  const scope = useRef(pid);
   const refresh = useCallback(() => setRefreshKey((value) => value + 1), []);
   useEffect(() => {
     const controller = new AbortController();
     let timer: ReturnType<typeof setTimeout>;
-    setData(null);
+    if (scope.current !== pid || !enabled) setData(null);
+    scope.current = pid;
     setError(null);
     setLoading(true);
     if (!enabled) return;
@@ -64,7 +107,7 @@ export function usePublicationReadiness(
             failure instanceof ApiError
               ? failure
               : new Error(
-                  "Não foi possível verificar a publicação. Confira sua conexão e tente novamente.",
+                  "Não foi possível verificar a publicação. A consulta será repetida automaticamente.",
                 ),
           );
       } finally {
@@ -168,7 +211,12 @@ export function usePublicationOperation(
         setOperation(incoming);
         setError(null);
         setSyncedAt(Date.now());
-        delay = incoming && inProgress(incoming) ? 1500 : 15000;
+        delay =
+          incoming &&
+          inProgress(incoming) &&
+          incoming.result_ref.publication_recovery?.state !== "attention"
+            ? 1500
+            : 15000;
         repeat = !operationId || (!!incoming && inProgress(incoming));
       } catch (failure) {
         if (controller.signal.aborted) return;
@@ -176,7 +224,7 @@ export function usePublicationOperation(
           failure instanceof ApiError
             ? failure
             : new Error(
-                "Não foi possível atualizar o acompanhamento. Confira sua conexão e tente novamente.",
+                "Não foi possível atualizar o acompanhamento. A consulta será repetida automaticamente.",
               ),
         );
         if (

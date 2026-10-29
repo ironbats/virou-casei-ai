@@ -1,7 +1,11 @@
 import { useId, useState } from "react";
 import { Copy, FileCode2 } from "lucide-react";
 import { Link } from "react-router-dom";
-import type { Operation, PublicationBuildDiagnostic } from "../shared/types";
+import type {
+  Operation,
+  PublicationBuildDiagnostic,
+  PublicationMigrationDiagnostic,
+} from "../shared/types";
 
 const categories: Record<PublicationBuildDiagnostic["category"], string> = {
   source: "Código do projeto",
@@ -51,6 +55,45 @@ function diagnosticReport(
   ].join("\n");
 }
 
+function migrationReport(
+  operation: Operation,
+  diagnostic: PublicationMigrationDiagnostic,
+) {
+  return [
+    "Diagnóstico das migrations",
+    `Operação: ${operation.id}`,
+    `Revisão: ${operation.result_ref.revision_id || "não informada"}`,
+    `Etapa: ${operation.result_ref.publication_failure?.stage || "não informada"}`,
+    `Código: ${diagnostic.code}`,
+    ...(diagnostic.analysis_method === "sql_lexical_v2"
+      ? ["Método: conferência estática dos comandos SQL e de suas posições."]
+      : []),
+    ...(diagnostic.published_revision_id
+      ? [`Revisão publicada de referência: ${diagnostic.published_revision_id}`]
+      : []),
+    ...diagnostic.issues.flatMap((issue, index) => [
+      "",
+      `${index + 1}. ${issue.code} · ${issue.path || "Arquivo não identificado"}`,
+      ...(issue.line
+        ? [
+            `Localização: linha ${issue.line}${issue.column ? `, coluna ${issue.column}` : ""}`,
+          ]
+        : []),
+      ...(issue.statement_type ? [`Comando SQL: ${issue.statement_type}`] : []),
+      ...(issue.operation ? [`Operação detectada: ${issue.operation}`] : []),
+      issue.message,
+      ...(issue.explanation ? [issue.explanation] : []),
+      issue.hint,
+    ]),
+    ...(diagnostic.issue_count > diagnostic.issues.length
+      ? [
+          "",
+          `Exibindo ${diagnostic.issues.length} de ${diagnostic.issue_count} problemas.`,
+        ]
+      : []),
+  ].join("\n");
+}
+
 export function PublicationBuildDiagnostics({
   operation,
   projectId,
@@ -68,21 +111,41 @@ export function PublicationBuildDiagnostics({
     candidate?.format_version === 1 && Array.isArray(candidate.issues)
       ? candidate
       : null;
+  const migrationCandidate = failure?.migration;
+  const migration =
+    migrationCandidate?.format_version === 1 &&
+    migrationCandidate.category === "migration" &&
+    Array.isArray(migrationCandidate.issues)
+      ? migrationCandidate
+      : null;
   const isBuildFailure =
     operation.state === "failed" &&
     (!!candidate ||
       operation.error_code?.startsWith("BUILD_") ||
       failure?.stage === "publication_building");
-  if (!isBuildFailure) return null;
+  const isMigrationFailure =
+    ["failed", "reconciling"].includes(operation.state) &&
+    (!!migrationCandidate || operation.error_code?.startsWith("MIGRATION_"));
+  if (!isBuildFailure && !isMigrationFailure) return null;
+  const title = isMigrationFailure
+    ? "Diagnóstico das migrations"
+    : "Diagnóstico da compilação";
   const projectPath = `/app/projetos/${encodeURIComponent(projectId)}`;
+  const diagnosticRevision = isMigrationFailure
+    ? operation.result_ref.revision_id
+    : build?.revision_id;
   const revisionChanged =
-    build?.revision_id &&
+    diagnosticRevision &&
     currentRevisionId &&
-    build.revision_id !== currentRevisionId;
+    diagnosticRevision !== currentRevisionId;
   async function copyReport() {
-    if (!build) return;
+    if (!build && !migration) return;
     try {
-      await navigator.clipboard.writeText(diagnosticReport(operation, build));
+      await navigator.clipboard.writeText(
+        migration
+          ? migrationReport(operation, migration)
+          : diagnosticReport(operation, build!),
+      );
       setCopyStatus("Diagnóstico copiado.");
     } catch {
       setCopyStatus(
@@ -98,15 +161,160 @@ export function PublicationBuildDiagnostics({
       <div className="publication-build-heading">
         <h2 id={titleId}>
           <FileCode2 size={20} aria-hidden="true" />
-          Diagnóstico da compilação
+          {title}
         </h2>
-        {build && (
+        {(build || migration) && (
           <button className="button" onClick={() => void copyReport()}>
             <Copy size={16} aria-hidden="true" /> Copiar diagnóstico
           </button>
         )}
       </div>
-      {build ? (
+      {migration ? (
+        <>
+          <p>
+            Confira os arquivos e as orientações da conferência do banco. Os
+            registros de migrations aplicadas precisam ser preservados.
+          </p>
+          {migration.issues.some((issue) => issue.reason === "unsafe_sql") && (
+            <p className="notice publication-migration-method">
+              Este bloqueio vem de regras automáticas de segurança sobre o SQL
+              das migrations pendentes. A conferência identifica comandos que
+              exigem revisão antes da execução no banco. A Análise IA abaixo
+              ajuda a investigar e preparar uma correção; a publicação continua
+              sujeita à conferência do SQL e dos registros já aplicados.
+            </p>
+          )}
+          {migration.analysis_method === "sql_lexical_v2" && (
+            <p className="small muted">
+              A conferência lê cada comando SQL e sua posição. Comentários e
+              valores de texto entre aspas não são tratados como comandos.
+            </p>
+          )}
+          <dl className="publication-facts publication-build-facts">
+            <div>
+              <dt>Origem do problema</dt>
+              <dd>Migrations do banco</dd>
+            </div>
+            <div>
+              <dt>Revisão analisada</dt>
+              <dd>{diagnosticRevision || "Não informada"}</dd>
+            </div>
+            {migration.published_revision_id && (
+              <div>
+                <dt>Revisão publicada de referência</dt>
+                <dd>{migration.published_revision_id}</dd>
+              </div>
+            )}
+          </dl>
+          {revisionChanged && (
+            <p className="notice">
+              Este diagnóstico pertence a uma revisão anterior. Confira os
+              arquivos da revisão indicada antes de alterar a revisão atual.
+            </p>
+          )}
+          <ol className="publication-build-issues">
+            {migration.issues.map((issue, index) => (
+              <li key={`${issue.code}:${issue.path || ""}:${index}`}>
+                <div className="publication-build-issue-heading">
+                  <strong>
+                    {issue.path || "Arquivo não identificado"}
+                    {issue.line ? `:${issue.line}` : ""}
+                    {issue.line && issue.column ? `:${issue.column}` : ""}
+                  </strong>
+                  <code>{issue.code}</code>
+                </div>
+                <p className="publication-build-message">{issue.message}</p>
+                {(issue.statement_type || issue.operation || issue.line) && (
+                  <dl className="publication-migration-evidence">
+                    {issue.statement_type && (
+                      <div>
+                        <dt>Comando SQL</dt>
+                        <dd>{issue.statement_type}</dd>
+                      </div>
+                    )}
+                    {issue.operation && (
+                      <div>
+                        <dt>Operação detectada</dt>
+                        <dd>{issue.operation}</dd>
+                      </div>
+                    )}
+                    {issue.line && (
+                      <div>
+                        <dt>Localização</dt>
+                        <dd>
+                          Linha {issue.line}
+                          {issue.column ? `, coluna ${issue.column}` : ""}
+                        </dd>
+                      </div>
+                    )}
+                  </dl>
+                )}
+                {issue.explanation && (
+                  <p className="publication-build-message">
+                    {issue.explanation}
+                  </p>
+                )}
+                {issue.reason === "unsafe_sql" && !issue.statement_type && (
+                  <p className="small muted">
+                    Esta tentativa foi registrada sem a posição e o comando
+                      detectados. Confira o SQL da revisão indicada e o contexto
+                      disponível na Análise IA. O nome do arquivo, sozinho, não
+                      comprova perda de dados.
+                  </p>
+                )}
+                <p className="small muted">{issue.hint}</p>
+              </li>
+            ))}
+          </ol>
+          {migration.issue_count > migration.issues.length && (
+            <p className="notice">
+              Exibindo {migration.issues.length} de {migration.issue_count}{" "}
+              problemas. Confira também os demais arquivos de migrations desta
+              revisão.
+            </p>
+          )}
+          <details className="publication-build-execution">
+            <summary>Informações da conferência</summary>
+            <dl className="publication-facts publication-build-facts">
+              <div>
+                <dt>Operação</dt>
+                <dd>{operation.id}</dd>
+              </div>
+              <div>
+                <dt>Código para suporte</dt>
+                <dd>{migration.code}</dd>
+              </div>
+              {migration.issues.map((issue, index) => (
+                <div key={`${issue.path || ""}:${index}`}>
+                  <dt>{issue.path || `Problema ${index + 1}`}</dt>
+                  <dd>
+                    Origem do registro:{" "}
+                    {issue.receipt_source === "remote"
+                      ? "Banco remoto"
+                      : issue.receipt_source === "inventory"
+                        ? "Histórico da publicação"
+                        : "Revisão candidata"}
+                  </dd>
+                  {issue.expected_sha256 && (
+                    <dd>SHA-256 registrado: {issue.expected_sha256}</dd>
+                  )}
+                  {issue.actual_sha256 && (
+                    <dd>
+                      {[
+                        "receipt_conflict",
+                        "pending_receipt_conflict",
+                      ].includes(issue.reason)
+                        ? "SHA-256 do recibo remoto"
+                        : "SHA-256 da revisão"}
+                      : {issue.actual_sha256}
+                    </dd>
+                  )}
+                </div>
+              ))}
+            </dl>
+          </details>
+        </>
+      ) : build ? (
         <>
           <p>
             A revisão não pôde ser preparada para publicação.{" "}
@@ -197,9 +405,10 @@ export function PublicationBuildDiagnostics({
         </>
       ) : (
         <p className="notice">
-          Esta tentativa não possui um diagnóstico detalhado de compilação
-          armazenado. Uma nova publicação registrará os detalhes disponíveis do
-          compilador. Referência da tentativa: {operation.id}.
+          {isMigrationFailure
+            ? "Esta tentativa não possui um diagnóstico detalhado de migrations armazenado. Consulte a mensagem da operação e confira os registros antes de continuar."
+            : "Esta tentativa não possui um diagnóstico detalhado de compilação armazenado. Uma nova publicação registrará os detalhes disponíveis do compilador."}{" "}
+          Referência da tentativa: {operation.id}.
         </p>
       )}
       <div className="actions">

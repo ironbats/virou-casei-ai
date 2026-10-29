@@ -5,6 +5,7 @@ from viracase.infrastructure.models import new_id
 from viracase.infrastructure.observability import heartbeat, prune
 from viracase.infrastructure.publication_build import IsolatedBuild
 from viracase.infrastructure.publication_logging import emit, exception_fields
+from viracase.infrastructure.publication_maintenance import schedule_automatic_verification
 
 
 def diagnostic_signature(diagnostics):
@@ -36,6 +37,8 @@ def start_monitor(repo, stop):
                 else:
                     diagnostic_id = diagnostics.get("diagnostic_id")
                 heartbeat(repo, identity, diagnostics)
+                if repo is not None:
+                    schedule_automatic_verification(repo)
                 now = time.monotonic()
                 if signature != previous or now - last_logged >= 300:
                     emit(

@@ -387,3 +387,50 @@ test("falha ao ler um arquivo bloqueia aplicação e permite recuperação sem m
   await expect(apply).toBeEnabled();
   expect(mutationCount).toBe(0);
 });
+
+test("proposta distingue migrations preservadas e novas antes da aplicação", async ({
+  page,
+}) => {
+  await open(page, "?migration-history=1");
+  const history = page.locator(".proposal-migration-history");
+  await expect(history).toContainText("1 preservada(s) · 1 nova(s)");
+  await history.locator("summary").focus();
+  await page.keyboard.press("Enter");
+  await expect(
+    page.getByRole("region", { name: "Migrations preservadas" }),
+  ).toContainText("migrations/0001.sql");
+  await expect(
+    page.getByRole("region", { name: "Novas migrations" }),
+  ).toContainText("migrations/0002.sql");
+  await expect(history).toContainText(
+    "O SQL só será enviado ao banco durante a publicação.",
+  );
+  await page.setViewportSize({ width: 375, height: 900 });
+  expect(
+    await page.evaluate(
+      () => document.documentElement.scrollWidth <= innerWidth,
+    ),
+  ).toBe(true);
+  const button = page.getByRole("button", {
+    name: "Aplicar alterações revisadas",
+    exact: true,
+  });
+  await expect(button).toBeVisible();
+  expect(
+    (await button.boundingBox())!.y + (await button.boundingBox())!.height,
+  ).toBeLessThanOrEqual(900);
+});
+
+test("rejeição do histórico apresenta arquivo, operação e revisão-base sem esconder a proposta", async ({
+  page,
+}) => {
+  await open(page, "?migration-error=1");
+  const diagnostic = page.locator(".migration-history-error");
+  await expect(diagnostic).toContainText("base-revision");
+  await expect(diagnostic).toContainText("migrations/0001.sql");
+  await expect(diagnostic).toContainText("Alteração de conteúdo");
+  await expect(diagnostic).toContainText("A revisão salva permanece intacta.");
+  await expect(
+    page.getByRole("region", { name: "Diff de public/modal.ts" }),
+  ).toBeVisible();
+});

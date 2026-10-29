@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import { api } from "./api";
 import type { Connection } from "./integration-types";
 import type { Verification } from "./publication-verification-status";
+import type { AutomaticVerification } from "./automatic-publication-status";
 
 export type PublicationDiagnostic = {
   can_publish: boolean;
@@ -32,6 +33,7 @@ export type PublicationDiagnostic = {
     environment?: Record<string, unknown>;
   }[];
   verification: Verification | null;
+  automatic_verification?: AutomaticVerification;
 };
 
 export function usePublicationDiagnostics(config: Connection) {
@@ -105,7 +107,18 @@ export function publicationReadiness(
 ) {
   if (!data)
     return loading ? "Consultando publicação…" : "Diagnóstico indisponível";
-  if (!data.can_publish) return "Publicação bloqueada";
+  if (!data.can_publish) {
+    const automatic = data.automatic_verification;
+    if (automatic?.enabled) {
+      if (["queued", "running"].includes(automatic.state))
+        return "Verificação automática em andamento";
+      if (automatic.state === "scheduled")
+        return "Aguardando verificação automática";
+      if (automatic.state === "retry_wait")
+        return "Aguardando nova tentativa automática";
+    }
+    return "Publicação bloqueada";
+  }
   return data.stack_readiness?.some((profile) => !profile.can_publish)
     ? "Publicação parcialmente liberada"
     : "Publicação liberada";

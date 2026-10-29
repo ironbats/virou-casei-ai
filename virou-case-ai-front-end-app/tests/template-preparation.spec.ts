@@ -520,7 +520,7 @@ test("teclado, celulares, zoom e texto hostil preservam leitura sem executar mar
   for (const width of [320, 375, 768, 1024, 1440]) {
     await page.setViewportSize({ width, height: 900 });
     if (width <= 900)
-      await page.getByRole("tab", { name: "Construção", exact: true }).click();
+      await page.getByRole("tab", { name: "Chat", exact: true }).click();
     expect(
       await page.evaluate(
         () => document.documentElement.scrollWidth <= innerWidth,

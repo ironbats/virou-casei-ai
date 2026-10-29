@@ -3,9 +3,14 @@ import AxeBuilder from "@axe-core/playwright";
 import type { Operation } from "../src/shared/types";
 import {
   preparationProject,
+  preparationRevision,
   preparationWorkspace,
 } from "./templatePreparationFixture";
-import { showBuildHistory } from "./workspaceHelper";
+import {
+  showConversation,
+  editorAction,
+  showBuildHistory,
+} from "./workspaceHelper";
 
 test.use({ viewport: { width: 1440, height: 950 } });
 
@@ -68,7 +73,7 @@ test("falha informa motivo e referência sem perder pedido, anexo ou revisão", 
 }, info) => {
   const { turn, state } = await failedBuild(page);
   await expect(turn.locator(".build-response > p").first()).toHaveText(message);
-  await page.getByRole("button", { name: "Usar texto simples" }).click();
+  await editorAction(page, "Usar texto simples");
   const original = await page.locator(".code-editor").inputValue();
   const details = turn.locator("details").filter({
     has: page.getByText("Detalhes da falha", { exact: true }),
@@ -151,11 +156,7 @@ test("detalhes de falha são acessíveis e cabem de 320 a 1440 pixels", async ({
   await turn.getByText("Detalhes da falha", { exact: true }).click();
   for (const width of [320, 375, 768, 1024, 1440]) {
     await page.setViewportSize({ width, height: 950 });
-    const chatTab = page.getByRole("tab", {
-      name: "Construção",
-      exact: true,
-    });
-    if (await chatTab.isVisible()) await chatTab.click();
+    await showConversation(page);
     await expect(turn.getByText(operationId, { exact: true })).toBeVisible();
     expect(
       await page.evaluate(
@@ -192,3 +193,110 @@ test("detalhes de falha são acessíveis e cabem de 320 a 1440 pixels", async ({
     path: info.outputPath("generation-failure-responsive.png"),
   });
 });
+
+test("falha assíncrona de histórico localiza o arquivo protegido sem criar proposta", async ({
+  page,
+}) => {
+  const { turn, state } = await failedBuild(page, {
+    error_code: "MIGRATION_HISTORY_IMMUTABLE",
+    progress_message:
+      "Uma migration já consolidada não pode ser alterada. Crie uma nova migration incremental.",
+    result_ref: {
+      migration_failure: {
+        code: "MIGRATION_HISTORY_IMMUTABLE",
+        migration_history: {
+          format_version: 1,
+          base_revision_id: preparationRevision,
+          operation: "generation_batch",
+          issue_count: 2,
+          issues: [
+            { path: "migrations/0001.sql", operation: "modify" },
+            { path: "migrations/0002.sql", operation: "delete" },
+          ],
+        },
+      },
+    },
+  });
+  const diagnostic = turn.locator(".migration-history-error");
+  await expect(diagnostic).toContainText(preparationRevision);
+  await expect(diagnostic).toContainText("migrations/0001.sql");
+  await expect(diagnostic).toContainText("Alteração de conteúdo");
+  await expect(diagnostic).toContainText("migrations/0002.sql");
+  await expect(diagnostic).toContainText("Exclusão");
+  await expect(diagnostic).toContainText("A revisão salva permanece intacta");
+  await expect(
+    turn.getByRole("button", { name: "Revisar alterações" }),
+  ).toHaveCount(0);
+  await expect(
+    turn.getByRole("button", { name: "Reutilizar pedido" }),
+  ).toBeEnabled();
+  await page.reload();
+  await showBuildHistory(page);
+  await expect(
+    page.locator(".build-turn .migration-history-error"),
+  ).toContainText("migrations/0001.sql");
+  expect(state.contextRevision).toBe(preparationRevision);
+  expect(
+    state.requests.filter((item) => item.path.endsWith("/messages")),
+  ).toEqual([]);
+  expect(state.generation).toHaveLength(1);
+});
+
+for (const code of [
+  "MIGRATION_VALIDATION_FAILED",
+  "MIGRATION_BASELINE_UNVERIFIABLE",
+  "MIGRATION_REVIEW_REQUIRED",
+])
+  test(`${code} mostra localização e orientação segura na conversa`, async ({
+    page,
+  }) => {
+    const { turn, state } = await failedBuild(page, {
+      error_code: code,
+      progress_message: "O plano de migrations precisa de correção.",
+      result_ref: {
+        migration_failure: {
+          code,
+          message: "O plano de migrations precisa de correção.",
+          base_revision_id: preparationRevision,
+          migration: {
+            format_version: 1,
+            issue_count: 1,
+            issues: [
+              {
+                path: "migrations/0003_evolucao.sql",
+                statement_index: 2,
+                line: 4,
+                message: "A instrução não é compatível com o schema validado.",
+                hint: "Revise somente a nova migration incremental.",
+              },
+            ],
+            ...{ sql: "synthetic-private-sql-that-must-not-be-rendered" },
+          },
+        },
+      },
+    });
+    const diagnostic = turn.locator(".migration-history-error");
+    await expect(diagnostic).toContainText("Validação das migrations");
+    await expect(diagnostic).toContainText("migrations/0003_evolucao.sql");
+    await expect(diagnostic).toContainText("Instrução 2");
+    await expect(diagnostic).toContainText("Linha 4");
+    await expect(diagnostic).toContainText("Revise somente a nova migration");
+    await expect(turn).not.toContainText("synthetic-private-sql");
+    await expect(
+      turn.getByText("O plano de migrations precisa de correção.", {
+        exact: true,
+      }),
+    ).toHaveCount(1);
+    await page.setViewportSize({ width: 320, height: 950 });
+    await showConversation(page);
+    await expect(diagnostic).toBeVisible();
+    expect(
+      await diagnostic.evaluate(
+        (element) => element.scrollWidth <= element.clientWidth + 1,
+      ),
+    ).toBe(true);
+    expect(state.contextRevision).toBe(preparationRevision);
+    expect(
+      state.requests.filter((item) => item.path.endsWith("/messages")),
+    ).toEqual([]);
+  });

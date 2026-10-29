@@ -12,11 +12,17 @@ publication_prepare_compose
 publication_preserve_runtime_user
 mkdir -p var/sources var/secrets
 publication_compose config --quiet
-if ! publication_compose up -d --build --wait --wait-timeout 300; then
-  echo 'Diagnostico dos inicializadores (ultimas 120 linhas):' >&2
-  publication_compose logs --no-color --tail=120 initialize storage-init || true
+publication_build_images
+startup_started_at="$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
+if publication_compose up -d --no-build --wait --wait-timeout 300; then
+  :
+else
+  startup_status=$?
+  echo 'DOCKER_STARTUP_FAILED: o build concluiu, mas a inicializacao ou a verificacao de saude falhou.' >&2
+  printf 'Diagnostico dos inicializadores desde %s (ate 120 linhas por servico):\n' "$startup_started_at" >&2
+  publication_compose logs --no-color --timestamps --since "$startup_started_at" --tail=120 initialize storage-init || true
   echo 'Inicializacao incompleta. Consulte os logs de initialize, storage-init, public-api, admin-api e worker.' >&2
-  exit 1
+  exit "$startup_status"
 fi
 if ! publication_compose run --rm --no-deps initialize python script/bootstrap-admin.py --check; then
   echo 'Falha na verificacao das credenciais administrativas. Consulte os logs de initialize.' >&2
@@ -28,6 +34,6 @@ if ! publication_compose exec -T worker python script/diagnose-publication.py --
   echo 'A plataforma esta iniciada, mas a publicacao continua bloqueada pelo diagnostico acima.' >&2
   exit 2
 fi
-printf '%s\n' 'Executor local READY. A publicacao externa ainda exige a verificacao operacional da conexao no Backoffice.'
+printf '%s\n' 'Executor local READY. O worker verifica automaticamente as conexoes Cloudflare validadas ou ativas. Acompanhe o estado no Backoffice.'
 echo 'Execute o script/run-local.sh do frontend e do backoffice.'
 publication_compose ps

@@ -109,6 +109,12 @@ class Gateway:
             data = response(files=[{"path": "../escape.txt", "content": "unsafe"}], edits=[])
         if self.mode == "secret":
             data = response(message="sk-proj-" + "x" * 40)
+        if policy.get("generation_full_files") and data.get("edits"):
+            current = json.loads(prompt[prompt.index('{"stack"') :])["files"]
+            data["files"] = [
+                {"path": edit["path"], "content": current[edit["path"]].replace(edit["old"], edit["new"], 1)}
+                for edit in data.pop("edits")
+            ]
         return ModelResult(json.dumps(data), usage, "synthetic")
 
 

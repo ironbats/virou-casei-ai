@@ -313,6 +313,7 @@ class Integrations:
                 for name in (
                     "qualification", "runtime_verification", "publication_check_blocked",
                     "publication_check_blocked_stacks",
+                    "automatic_verification",
                 )
                 if name in row.validation and evidence.get("ready")
             }

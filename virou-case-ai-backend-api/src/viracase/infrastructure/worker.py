@@ -6,7 +6,7 @@ from datetime import timedelta
 from decimal import Decimal
 from pathlib import Path
 
-from sqlalchemy import delete, select, update
+from sqlalchemy import and_, delete, or_, select, update
 
 from viracase.application.generation import generated_files, generation_prompt
 from viracase.application.progress import record_progress
@@ -63,12 +63,28 @@ class Worker:
                         "VERIFICATION_RESUME_REQUIRED",
                     )
                     op.progress_stage = "verification_retained"
-                elif op.type == "publication" and op.result.get("external_effect_pending"):
+                elif op.type == "publication" and (
+                    op.result.get("external_effect_pending")
+                    or (
+                        (publication_resource := db.get(PublicationResource, op.project_id))
+                        and publication_resource.inventory.get("migration_in_progress")
+                    )
+                ):
+                    from viracase.infrastructure.publication_recovery import recovery_status
+
                     op.state, job.state, op.progress_stage = (
                         "reconciling",
                         "reconciling",
                         "publication_reconciling",
                     )
+                    op.result = {
+                        **op.result,
+                        "publication_recovery": recovery_status(
+                            "scheduled", previous=op.result.get("publication_recovery"),
+                            next_attempt_at=utcnow().isoformat(),
+                        ),
+                    }
+                    job.available_at = utcnow()
                 elif attempt and attempt.state == "confirmed":
                     self.repo.settle_operation(db, op, attempt.actual_brl or Decimal(0))
                     op.state, job.state, op.error_code = "failed", "done", "PROCESSING_FAILED"
@@ -115,7 +131,7 @@ class Worker:
             oid, token = job.operation_id, new_id()
             operation = db.get(Operation, oid)
             request_timeout = self.repo.config.provider_timeout
-            if operation.type in {"generation", "template_preparation"}:
+            if operation.type in {"generation", "template_preparation", "code_analysis"}:
                 request_timeout, _ = execution_timeouts(operation.policy, request_timeout)
             claimed = db.execute(
                 update(Job)
@@ -190,6 +206,10 @@ class Worker:
                 from viracase.infrastructure.publication_worker import execute_publication
 
                 return execute_publication(self, oid, token)
+            if current.type == "code_analysis":
+                from viracase.infrastructure.code_analysis_worker import execute_code_analysis
+
+                return execute_code_analysis(self, oid, token)
             if current.type == "generation" and current.policy.get("generation_contract_version") in {3, 4}:
                 from viracase.infrastructure.conversation_generation import execute_conversation
 
@@ -377,6 +397,7 @@ class Worker:
                     "candidate": revision.candidate,
                     "changed_files": changed_files,
                     "validation": "structure_checked",
+                    **revision.migration_evidence,
                 }
                 op.state, op.progress_stage = "succeeded", "revision_ready"
             except (ValueError, KeyError, TypeError, RuleError) as exc:
@@ -416,7 +437,9 @@ class Worker:
         if not self.repo.config.lifecycle_enabled:
             return 0
         from viracase.infrastructure.publication_lifecycle import synchronize_publication_visibility
+        from viracase.infrastructure.publication_recovery import recover_publications
 
+        recover_publications(self.repo)
         synchronize_publication_visibility(self.repo)
         with self.repo.sessions() as db:
             ids = list(
@@ -462,7 +485,10 @@ class Worker:
                 .where(
                     Operation.account_id == aid,
                     Operation.type.in_(["publication", "project_deletion"]),
-                    Job.state == "running",
+                    or_(
+                        Job.state == "running",
+                        and_(Job.state == "reconciling", Job.lease_token.is_not(None), Job.lease_until > utcnow()),
+                    ),
                 )
                 .limit(1)
             )

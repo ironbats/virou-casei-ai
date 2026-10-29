@@ -8,7 +8,9 @@ from hashlib import sha256
 import httpx
 
 from viracase.domain.rules import RuleError
+from viracase.infrastructure.publication_d1_diagnostics import d1_error_evidence
 from viracase.infrastructure.publication_logging import emit, exception_fields
+from viracase.infrastructure.publication_sql_review import split_sql_statements
 
 
 class PublicationUncertain(RuleError):
@@ -26,14 +28,29 @@ class CloudflareGateway:
         self.account_path = "/accounts/" + policy["account_id"]
         self.before_request = None
         self.verification_observer = None
+        self.last_request_diagnostic = None
         self.clock, self.sleep = clock or time.monotonic, sleep or time.sleep
 
     def request(self, method, path, **kwargs):
-        if self.before_request:
-            self.before_request(method)
         headers = kwargs.pop("headers", {"Authorization": "Bearer " + self.token})
         route = self._route_label(path)
         started, status, error_codes, ray = time.monotonic(), None, [], None
+        sql = kwargs.get("json", {}).get("sql") if isinstance(kwargs.get("json"), dict) else None
+        is_d1 = route.endswith("/d1/database/{database}/query")
+        envelope = None
+        self.last_request_diagnostic = None
+        if self.before_request:
+            try:
+                self.before_request(method)
+            except Exception as exc:
+                exc.provider_diagnostic = {
+                    "method": method, "route": route, "status": None,
+                    "provider_error_codes": [], "cf_ray": None,
+                    "effect_outcome": "not_sent", "reason": "local_dispatch_blocked",
+                    "message": "A conferência local interrompeu a solicitação antes do envio à Cloudflare.",
+                }
+                self.last_request_diagnostic = exc.provider_diagnostic
+                raise
         completed = False
         try:
             with httpx.Client(
@@ -66,18 +83,27 @@ class CloudflareGateway:
             if status in {401, 403}:
                 raise RuleError("CONFIGURATION_INVALID", "Token inválido ou sem permissão para a conta/operação.", 409)
             if not isinstance(envelope, dict):
-                raise ValueError("invalid_response_envelope")
+                raise TypeError("invalid_response_envelope")
             if not response.is_success or not envelope.get("success"):
-                raise RuleError("PUBLICATION_REJECTED", "A Cloudflare recusou a operação. Revise as permissões e o perfil no backoffice.")
+                raise RuleError("PUBLICATION_REJECTED", "A Cloudflare recusou a operação. Consulte o diagnóstico desta tentativa.")
             completed = True
+            self.last_request_diagnostic = {
+                "method": method, "route": route, "status": status,
+                "provider_error_codes": error_codes, "cf_ray": ray,
+            }
             return envelope.get("result")
         except RuleError as exc:
             exc.provider_diagnostic = {
                 "method": method, "route": route, "status": status,
                 "provider_error_codes": error_codes, "cf_ray": ray,
+                **(d1_error_evidence(envelope, sql) if is_d1 else {}),
             }
+            if is_d1 and exc.code in {"PUBLICATION_RESULT_UNKNOWN", "QUOTA_EXCEEDED", "CONFIGURATION_INVALID"}:
+                exc.provider_diagnostic["effect_outcome"] = "unknown"
+            self.last_request_diagnostic = exc.provider_diagnostic
             emit("cloudflare_request_failed", "error", method=method, route=route, status=status,
                  provider_error_codes=error_codes, cf_ray=ray,
+                 **({key: exc.provider_diagnostic[key] for key in ("reason", "effect_outcome")} if is_d1 else {}),
                  duration_ms=round((time.monotonic() - started) * 1000), **exception_fields(exc))
             raise
         except (httpx.TimeoutException, httpx.NetworkError, httpx.RemoteProtocolError) as exc:
@@ -90,7 +116,9 @@ class CloudflareGateway:
                 "method": method, "route": route, "status": status,
                 "provider_error_codes": error_codes, "cf_ray": ray,
                 "transport_error": type(exc).__name__,
+                "effect_outcome": "not_sent" if isinstance(exc, (httpx.ConnectTimeout, httpx.ConnectError, httpx.PoolTimeout)) else "unknown",
             }
+            self.last_request_diagnostic = failure.provider_diagnostic
             raise failure from None
         except (ValueError, KeyError, TypeError) as exc:
             emit("cloudflare_response_invalid", "error", method=method, route=route, status=status,
@@ -102,7 +130,9 @@ class CloudflareGateway:
                 "method": method, "route": route, "status": status,
                 "provider_error_codes": error_codes, "cf_ray": ray,
                 "response_error": type(exc).__name__,
+                **({"effect_outcome": "unknown"} if is_d1 else {}),
             }
+            self.last_request_diagnostic = failure.provider_diagnostic
             raise failure from None
         finally:
             if completed:
@@ -174,13 +204,34 @@ class CloudflareGateway:
         return self.request("POST", self.account_path + "/d1/database", json={"name": name})
 
     def query(self, database_id, sql, params=None):
-        result = self.request(
-            "POST",
-            self.account_path + "/d1/database/" + database_id + "/query",
-            json={"sql": sql, "params": params or []},
-        )
-        if not isinstance(result, list) or any(not item.get("success") for item in result):
-            raise RuleError("MIGRATION_FAILED", "D1 não confirmou a consulta/migration.")
+        try:
+            result = self.request(
+                "POST",
+                self.account_path + "/d1/database/" + database_id + "/query",
+                json={"sql": sql, "params": params or []},
+            )
+        except RuleError as exc:
+            diagnostic = getattr(exc, "provider_diagnostic", {})
+            if exc.code == "PUBLICATION_REJECTED" and diagnostic.get("effect_outcome") == "none":
+                failure = RuleError("MIGRATION_SQL_REJECTED", diagnostic["message"])
+                failure.provider_diagnostic = diagnostic
+                raise failure from None
+            raise
+        if not isinstance(result, list) or not result or any(not isinstance(item, dict) or item.get("success") is not True for item in result):
+            evidence = {**(self.last_request_diagnostic or {}), **d1_error_evidence({"result": result}, sql)}
+            failure = RuleError(
+                "MIGRATION_SQL_REJECTED" if evidence["effect_outcome"] == "none" else "MIGRATION_FAILED",
+                evidence["message"],
+            )
+            failure.provider_diagnostic = evidence
+            raise failure
+        if len(result) != len(split_sql_statements(sql)):
+            diagnostic = {
+                **(self.last_request_diagnostic or {}), "effect_outcome": "unknown",
+                "reason": "incomplete_results", "confirmed_statements": len(result),
+                "statement_count": len(split_sql_statements(sql)),
+            }
+            raise PublicationUncertain(diagnostic)
         return result
 
     def upload(self, name, database_id, artifact):

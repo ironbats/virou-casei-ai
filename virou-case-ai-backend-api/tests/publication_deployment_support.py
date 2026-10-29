@@ -47,8 +47,19 @@ case "$1" in
     case "${1:-}" in
       ps) printf 'existing-worker\n' ;;
       config) exit "${DOCKER_TEST_CONFIG_EXIT:-0}" ;;
-      build) exit "${DOCKER_TEST_BUILD_EXIT:-0}" ;;
-      up) exit "${DOCKER_TEST_UP_EXIT:-0}" ;;
+      build)
+        [[ -z "${DOCKER_TEST_BUILD_STDOUT:-}" ]] || printf '%s\n' "$DOCKER_TEST_BUILD_STDOUT"
+        [[ -z "${DOCKER_TEST_BUILD_STDERR:-}" ]] || printf '%s\n' "$DOCKER_TEST_BUILD_STDERR" >&2
+        exit "${DOCKER_TEST_BUILD_EXIT:-0}"
+        ;;
+      up)
+        [[ -z "${DOCKER_TEST_UP_STDERR:-}" ]] || printf '%s\n' "$DOCKER_TEST_UP_STDERR" >&2
+        exit "${DOCKER_TEST_UP_EXIT:-0}"
+        ;;
+      logs)
+        [[ -z "${DOCKER_TEST_LOGS_STDOUT:-}" ]] || printf '%s\n' "$DOCKER_TEST_LOGS_STDOUT"
+        exit "${DOCKER_TEST_LOGS_EXIT:-0}"
+        ;;
       run) exit "${DOCKER_TEST_CHECK_EXIT:-0}" ;;
       exec)
         code="${DOCKER_TEST_DIAG_EXIT:-0}"

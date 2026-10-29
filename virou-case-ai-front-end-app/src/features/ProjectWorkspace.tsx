@@ -1,4 +1,5 @@
-import { useEffect, useRef, useState } from "react";
+import { MigrationFailureNotice } from "./MigrationFailureNotice";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import {
   BookOpen,
   Code2,
@@ -7,8 +8,18 @@ import {
   History,
   MessageSquare,
   Save,
+  ScanSearch,
+  Pencil,
 } from "lucide-react";
-import { Link, useNavigate, useParams } from "react-router-dom";
+import {
+  Link,
+  useNavigate,
+  useParams,
+  useSearchParams,
+} from "react-router-dom";
+import { WorkspaceTopbar } from "../app/WorkspaceChrome";
+import { WorkspaceMenu } from "./WorkspaceMenu";
+import { useWorkbenchSplit } from "./useWorkbenchSplit";
 import { useSession } from "../app/session";
 import { api, ApiError, command } from "../shared/api";
 import { ErrorNotice, Loading } from "../shared/ui";
@@ -28,6 +39,10 @@ import { useDraft } from "./useDraft";
 import { mergeProjectDraft } from "./mergeProjectDraft";
 import { WorkspaceDialogs } from "./WorkspaceDialogs";
 import { ProjectPreview } from "./ProjectPreview";
+import { CodeAnalysisContent } from "./CodeAnalysisPanel";
+import { useCodeAnalysis } from "./useCodeAnalysis";
+import { requestCodeCorrection } from "./codeCorrection";
+import { protectedMigration } from "./migrationFiles";
 import { lazy, Suspense, type ComponentProps } from "react";
 const Editor = lazy(() =>
   import("./ProjectEditor").then((m) => ({ default: m.ProjectEditor })),
@@ -63,6 +78,18 @@ export function ProjectWorkspace() {
   const { projectId: pid = "" } = useParams(),
     { user } = useSession(),
     navigate = useNavigate();
+  const [searchParams, setSearchParams] = useSearchParams();
+  const requestedProposal = searchParams.get("proposal");
+  const requestedConversation = searchParams.get("conversation");
+  const showAnalysis = searchParams.get("analysis") === "1";
+  const openedProposal = useRef<string | null>(null);
+  const openedConversation = useRef<string | null>(null);
+  const openedAnalysis = useRef(false);
+  const conversationPanel = useRef<HTMLElement>(null);
+  const split = useWorkbenchSplit();
+  const focusedPanel = useRef<"code" | "chat" | null>(null);
+  const [previewIssues, setPreviewIssues] = useState<string[]>([]);
+  const [newRequestRequest, setNewRequestRequest] = useState(0);
   const draft = useDraft<ProjectDraft>(
     `/projects/${pid}/draft`,
     draftPayload,
@@ -82,16 +109,46 @@ export function ProjectWorkspace() {
     [replyText, setReplyText] = useState(""),
     [replyFocusRequest, setReplyFocusRequest] = useState(0),
     [followRequest, setFollowRequest] = useState(0),
-    [newFile, setNewFile] = useState(false),
+    [conversationRequest, setConversationRequest] = useState(0),
+    [conversationLookup, setConversationLookup] = useState(0),
+    [openingConversation, setOpeningConversation] = useState(false),
+    [conversationError, setConversationError] = useState<unknown>(null),
+    [newFile, setNewFile] = useState<false | "file" | "migration">(false),
     [editing, setEditing] = useState(false),
     [exporting, setExporting] = useState(false),
+    [requestedExport, setRequestedExport] = useState<{
+      operation: Operation;
+      revisionId: string | null;
+    } | null>(null),
     [review, setReview] = useState<ReviewSelection>(null),
     [remote, setRemote] = useState<{
       project: Project;
       files: Record<string, string>;
     } | null>(null);
+  useEffect(() => {
+    const update = (event: FocusEvent) => {
+      const element = event.target as Element;
+      focusedPanel.current = element.closest(".conversation-panel")
+        ? "chat"
+        : element.closest(".ide-panel")
+          ? "code"
+          : null;
+    };
+    document.addEventListener("focusin", update);
+    return () => document.removeEventListener("focusin", update);
+  }, []);
+  useLayoutEffect(() => {
+    if (split.narrow && focusedPanel.current) setMobile(focusedPanel.current);
+  }, [split.narrow]);
   const buildFlush = useRef<() => Promise<void>>(async () => {});
+  const correctionRetry = useRef(false);
   const tracking = useProjectOperations(pid);
+  const codeAnalysis = useCodeAnalysis({
+    projectId: pid,
+    revisionId: project?.current_revision_id ?? null,
+    source: previewIssues.length ? "preview" : "editor",
+    runtimeError: previewIssues.join("\n"),
+  });
   const canWrite = !!user?.access.allowed_actions.includes("write"),
     canExport = user?.access.allowed_actions.includes("export");
   const files = draft.data?.files ?? baseFiles ?? {},
@@ -102,12 +159,148 @@ export function ProjectWorkspace() {
     active = tracking.items.find(
       (o) => o.type === "generation" && inProgress(o),
     );
+  const pendingProposal = tracking.items.some(
+    (operation) =>
+      operation.type === "generation" &&
+      operation.state === "succeeded" &&
+      operation.result_ref.candidate &&
+      !operation.result_ref.applied_revision_id &&
+      !operation.result_ref.discarded_at,
+  );
+  const conversationOperations = tracking.items.map((operation) => {
+    if (operation.type !== "generation" || operation.analysis_id)
+      return operation;
+    const analysis = [codeAnalysis.operation, ...tracking.items].find(
+      (item) =>
+        item?.type === "code_analysis" &&
+        item.result_ref.correction_operation_id === operation.id,
+    );
+    return analysis
+      ? {
+          ...operation,
+          analysis_id: analysis.id,
+          analysis_revision_id: analysis.result_ref.revision_id,
+        }
+      : operation;
+  });
   const syncedOperations = useRef(new Set<string>());
   const syncFailedAt = useRef(0);
   const currentScope = useRef(pid),
     proposalAction = useRef(false),
     mounted = useRef(true);
   currentScope.current = pid;
+  function openConversation(operation: Operation) {
+    tracking.accept(operation);
+    tracking.refresh();
+    openedConversation.current = operation.id;
+    openedAnalysis.current = false;
+    setConversationError(null);
+    setOpeningConversation(false);
+    setSearchParams((previous) => {
+      const next = new URLSearchParams(previous);
+      next.delete("analysis");
+      next.delete("proposal");
+      next.set("conversation", operation.id);
+      return next;
+    });
+    setMobile("chat");
+    setFollowRequest((request) => request + 1);
+    setConversationRequest((request) => request + 1);
+  }
+  function focusConversation() {
+    const viewport = conversationPanel.current?.querySelector<HTMLElement>(
+      ".build-conversation",
+    );
+    if (!viewport) return;
+    viewport.focus({ preventScroll: true });
+    const target = requestedConversation
+      ? viewport.querySelector<HTMLElement>(
+          `[data-operation-id="${CSS.escape(requestedConversation)}"]`,
+        )
+      : viewport.querySelector<HTMLElement>(".code-analysis");
+    if (target)
+      viewport.scrollTop +=
+        target.getBoundingClientRect().top -
+        viewport.getBoundingClientRect().top;
+    conversationPanel.current?.scrollIntoView({ block: "nearest" });
+  }
+  useEffect(() => {
+    if (!requestedConversation) {
+      openedConversation.current = null;
+      setConversationError(null);
+      setOpeningConversation(false);
+      return;
+    }
+    if (
+      openedConversation.current === requestedConversation ||
+      !project ||
+      !caps ||
+      !draft.data ||
+      !baseFiles
+    )
+      return;
+    setConversationError(null);
+    setOpeningConversation(true);
+    const controller = new AbortController();
+    void api<Operation>(
+      `/operations/${encodeURIComponent(requestedConversation)}`,
+      {
+        signal: AbortSignal.any([
+          controller.signal,
+          AbortSignal.timeout(12000),
+        ]),
+      },
+    )
+      .then((operation) => {
+        if (
+          operation.id !== requestedConversation ||
+          operation.project_id !== pid ||
+          operation.type !== "generation"
+        )
+          throw new Error("A conversa solicitada não pertence a este projeto.");
+        if (controller.signal.aborted || currentScope.current !== pid) return;
+        openedConversation.current = requestedConversation;
+        tracking.accept(operation);
+        setMobile("chat");
+        setFollowRequest((request) => request + 1);
+        setConversationRequest((request) => request + 1);
+      })
+      .catch((failure) => {
+        if (!controller.signal.aborted && currentScope.current === pid)
+          setConversationError(failure);
+      })
+      .finally(() => {
+        if (!controller.signal.aborted && currentScope.current === pid)
+          setOpeningConversation(false);
+      });
+    return () => controller.abort();
+  }, [
+    requestedConversation,
+    conversationLookup,
+    pid,
+    !!project,
+    !!caps,
+    !!draft.data,
+    !!baseFiles,
+  ]);
+  useEffect(() => {
+    if (!showAnalysis) {
+      openedAnalysis.current = false;
+      return;
+    }
+    if (
+      openedAnalysis.current ||
+      !project ||
+      !caps ||
+      !draft.data ||
+      !baseFiles
+    )
+      return;
+    openedAnalysis.current = true;
+    setMobile("chat");
+    setFollowRequest((request) => request + 1);
+    setConversationRequest((request) => request + 1);
+  }, [showAnalysis, !!project, !!caps, !!draft.data, !!baseFiles]);
   useEffect(() => {
     mounted.current = true;
     return () => {
@@ -311,6 +504,50 @@ export function ProjectWorkspace() {
       setMobile("code");
     });
   }
+  useEffect(() => {
+    if (
+      !requestedProposal ||
+      openedProposal.current === requestedProposal ||
+      !project ||
+      !draft.data ||
+      !caps ||
+      !baseFiles ||
+      busy
+    )
+      return;
+    openedProposal.current = requestedProposal;
+    void act(async () => {
+      const op = await api<Operation>(
+        `/operations/${encodeURIComponent(requestedProposal)}`,
+        {
+          signal: AbortSignal.timeout(12000),
+        },
+      );
+      if (
+        op.project_id !== pid ||
+        op.type !== "generation" ||
+        op.state !== "succeeded" ||
+        op.result_ref.kind !== "implementation"
+      )
+        throw new Error(
+          "A proposta de correção não está disponível para este projeto.",
+        );
+      const proposal = await readProposal(op.id);
+      if (!mounted.current || currentScope.current !== pid) return;
+      tracking.accept(op);
+      setReview({ op, proposal });
+      setMobile("code");
+    });
+  }, [
+    requestedProposal,
+    pid,
+    !!project,
+    !!draft.data,
+    !!caps,
+    !!baseFiles,
+    busy,
+  ]);
+  useEffect(() => setPreviewIssues([]), [project?.current_revision_id]);
   async function refreshReview() {
     if (!review || proposalAction.current) return;
     await act(async () => {
@@ -491,20 +728,81 @@ export function ProjectWorkspace() {
       if (mounted.current && currentScope.current === pid) setBusy(false);
     }
   }
+  async function retryCorrection(operation: Operation) {
+    if (correctionRetry.current || busy) return;
+    correctionRetry.current = true;
+    try {
+      await act(async () => {
+        if (
+          !operation.analysis_id ||
+          !project?.current_revision_id ||
+          !canWrite ||
+          dirty ||
+          pendingProposal
+        )
+          throw new Error(
+            "Confira a revisão salva e o diagnóstico antes de solicitar outra correção.",
+          );
+        await draft.flush();
+        await buildFlush.current();
+        const accepted = await requestCodeCorrection({
+          projectId: pid,
+          analysisId: operation.analysis_id,
+          revisionId: project.current_revision_id,
+          previousId: operation.id,
+          onRecovering: () => {
+            if (mounted.current && currentScope.current === pid)
+              setMessage(
+                "Conferindo se a correção foi recebida. O acompanhamento será retomado nesta conversa.",
+              );
+          },
+        });
+        if (!mounted.current || currentScope.current !== pid) return;
+        setMessage("");
+        openConversation(accepted);
+      });
+    } finally {
+      correctionRetry.current = false;
+    }
+  }
   async function exportProject() {
     if (!project) return;
     await act(async () => {
-      await draft.flush();
-      const current = await api<Project>(`/projects/${pid}`);
-      const op = await command<Operation>(`/projects/${pid}/exports`, {
-        revision_id: current.current_revision_id,
-      });
-      tracking.accept(op);
-      tracking.refresh();
-      setExporting(false);
-      setMessage("Preparando download da revisão salva.");
+      const projectId = pid;
+      setRequestedExport(null);
+      try {
+        await draft.flush();
+        const current = await api<Project>(`/projects/${projectId}`);
+        const operation = await command<Operation>(
+          `/projects/${projectId}/exports`,
+          {
+            revision_id: current.current_revision_id,
+          },
+        );
+        if (!mounted.current || currentScope.current !== projectId) return;
+        setRequestedExport({
+          operation,
+          revisionId: current.current_revision_id,
+        });
+        tracking.accept(operation);
+        tracking.refresh();
+      } finally {
+        if (mounted.current && currentScope.current === projectId)
+          setExporting(false);
+      }
     });
   }
+  const exportOperation =
+    requestedExport?.operation.project_id === pid
+      ? tracking.items.find(
+          (operation) =>
+            operation.id === requestedExport.operation.id &&
+            operation.project_id === pid &&
+            operation.type === "export",
+        ) || requestedExport.operation
+      : null;
+  const exportRevision =
+    exportOperation?.result_ref.revision_id || requestedExport?.revisionId;
   const downloads = tracking.items.filter(
     (o) => o.type === "export" && o.state === "succeeded",
   );
@@ -512,101 +810,260 @@ export function ProjectWorkspace() {
     return (
       <>
         <ErrorNotice error={error || draft.error} />
+        <MigrationFailureNotice error={error || draft.error} />
         {!error && !draft.error && <Loading />}
       </>
     );
   const blocked = busy || !canWrite || !!draft.conflict;
+  const analysisBlocked =
+    blocked ||
+    !!active ||
+    project.current_revision_id !== draft.data.base_revision_id;
+  const analysisReason = !canWrite
+    ? "Seu acesso permite consultar o diagnóstico. Solicitar análise exige permissão de edição."
+    : !project.current_revision_id
+      ? "Salve uma revisão do projeto antes de pedir a análise."
+      : dirty
+        ? "Salve as alterações em uma revisão antes de pedir análise ou correção."
+        : analysisBlocked
+          ? "Aguarde a operação atual ou resolva o conflito do rascunho para continuar."
+          : "O diagnóstico usa a revisão salva e aparece na conversa do projeto.";
+  const analysisAction = (
+    <button
+      className="button workspace-analysis-button"
+      title={analysisReason}
+      aria-label={
+        codeAnalysis.operation ? "Ver análise IA no chat" : "Pedir Análise IA"
+      }
+      aria-describedby="code-analysis-entry-reason"
+      disabled={
+        codeAnalysis.loading ||
+        (!codeAnalysis.operation &&
+          (analysisBlocked ||
+            dirty ||
+            !project.current_revision_id ||
+            !!codeAnalysis.sending ||
+            codeAnalysis.recovering))
+      }
+      onClick={() => {
+        openedAnalysis.current = true;
+        setSearchParams((previous) => {
+          const next = new URLSearchParams(previous);
+          next.delete("conversation");
+          next.delete("proposal");
+          next.set("analysis", "1");
+          return next;
+        });
+        setMobile("chat");
+        setFollowRequest((request) => request + 1);
+        setConversationRequest((request) => request + 1);
+        if (!codeAnalysis.operation) void codeAnalysis.analyze();
+      }}
+    >
+      <ScanSearch size={16} />
+      <span>Análise IA</span>
+    </button>
+  );
   return (
     <div className="project-workspace">
-      <div className="workspace-heading">
-        <div>
-          <Link className="back-link" to="/app/projetos">
-            Meus projetos
-          </Link>
-          <span className="muted"> / </span>
-          <strong>{project.name}</strong>
-          <p className="small muted" role="status">
-            {draft.status}
-            {dirty
-              ? " · Alterações ainda não aplicadas à revisão"
-              : " · Revisão salva"}
+      <WorkspaceTopbar>
+        <div className="workspace-heading">
+          <div className="workspace-identity">
+            <Link className="back-link" to="/app/projetos">
+              Meus projetos
+            </Link>
+            <span className="muted"> / </span>
+            <h1 tabIndex={0} title={project.name}>
+              {project.name}
+            </h1>
+            <p
+              className="small muted workspace-draft-status"
+              role="status"
+              title={draft.status}
+            >
+              {dirty ? "Rascunho alterado" : draft.status}
+            </p>
+          </div>
+          <div className="actions">
+            <button
+              className="button"
+              aria-label="Baixar projeto"
+              title="Baixar projeto"
+              disabled={!canExport || busy}
+              onClick={() => setExporting(true)}
+            >
+              <Download size={16} />
+              <span className="workspace-action-label">Baixar projeto</span>
+            </button>
+            <PublicationControl
+              compact
+              pid={pid}
+              revision={project.current_revision_id}
+              dirty={dirty}
+              busy={busy}
+              operations={tracking.items}
+              beforeNavigate={async () => {
+                await draft.flush();
+                await buildFlush.current();
+              }}
+            />
+            <WorkspaceMenu label="Mais ações do projeto">
+              <button
+                className="button workspace-menu-download"
+                disabled={!canExport || busy}
+                onClick={() => setExporting(true)}
+              >
+                <Download size={16} />
+                Baixar projeto
+              </button>
+              <button
+                className="button"
+                onClick={() => setEditing(true)}
+                disabled={!canWrite}
+              >
+                <Pencil size={16} />
+                Editar projeto
+              </button>
+              <Link className="button" to={`/app/projetos/${pid}/historico`}>
+                <History size={16} />
+                Histórico de revisões
+              </Link>
+              <Link
+                className="button"
+                to={`/app/aprendizado/sdd?project=${pid}`}
+              >
+                <BookOpen size={16} />
+                Explorar guias
+              </Link>
+              {downloads.map((op) => (
+                <a
+                  className="button"
+                  key={op.id}
+                  href={`/api/v1/exports/${op.id}/download`}
+                >
+                  <Download size={16} />
+                  Baixar ZIP · revisão {op.result_ref.revision_id?.slice(0, 8)}
+                </a>
+              ))}
+              <p className="small muted">
+                {draft.status}
+                {dirty
+                  ? " · Alterações ainda não aplicadas à revisão"
+                  : " · Revisão salva"}
+              </p>
+            </WorkspaceMenu>
+          </div>
+        </div>
+      </WorkspaceTopbar>
+      <div className="workspace-alerts">
+        <ErrorNotice error={error || draft.error} />
+        <MigrationFailureNotice error={error || draft.error} />
+        <ErrorNotice error={conversationError} />
+        {openingConversation && (
+          <p className="small" role="status">
+            Abrindo a conversa…
           </p>
-        </div>
-        <div className="actions">
+        )}
+        {!!conversationError && requestedConversation && (
           <button
             className="button"
-            onClick={() => setEditing(true)}
-            disabled={!canWrite}
+            onClick={() => setConversationLookup((attempt) => attempt + 1)}
           >
-            Editar projeto
+            Tentar abrir conversa novamente
           </button>
-          <Link
-            className="icon-button"
-            aria-label="Histórico de revisões"
-            to={`/app/projetos/${pid}/historico`}
-          >
-            <History size={18} />
-          </Link>
-          <button
-            className="button"
-            disabled={!canExport || busy}
-            onClick={() => setExporting(true)}
-          >
-            <Download size={16} />
-            Baixar projeto
-          </button>
-          <PublicationControl
-            pid={pid}
-            revision={project.current_revision_id}
-            dirty={dirty}
-            busy={busy}
-            operations={tracking.items}
-            beforeNavigate={async () => {
-              await draft.flush();
-              await buildFlush.current();
-            }}
-          />
-        </div>
-      </div>
-      <ErrorNotice error={error || draft.error} />
-      {message && (
-        <p className="notice" role="status">
-          {message}
-        </p>
-      )}
-      {!!draft.error && !draft.conflict && (
-        <button className="button" onClick={() => void act(draft.flush)}>
-          Tentar salvar rascunho
-        </button>
-      )}
-      {project.current_revision_id !== draft.data.base_revision_id && (
-        <div className="notice">
-          A revisão salva mudou. Seu rascunho foi preservado.{" "}
-          <button
-            className="button"
-            onClick={() =>
-              void act(async () => {
-                const p = await api<Project>(`/projects/${pid}`);
-                setRemote({
-                  project: p,
-                  files: await revisionFiles(pid, p.current_revision_id),
-                });
-              })
+        )}
+        {message && (
+          <p className="notice" role="status">
+            {message}
+          </p>
+        )}
+        {exportOperation && (
+          <div
+            className={
+              "notice workspace-export-status" +
+              (exportOperation.state === "failed" ? " error" : "")
             }
+            role={exportOperation.state === "failed" ? "alert" : "status"}
+            data-operation-id={exportOperation.id}
           >
-            Comparar versões
+            <div>
+              <strong>
+                {exportOperation.state === "succeeded"
+                  ? "Download pronto."
+                  : exportOperation.state === "failed"
+                    ? "Não foi possível preparar o download."
+                    : exportOperation.state === "cancelled"
+                      ? "A preparação do download foi cancelada."
+                      : exportOperation.state === "reconciling"
+                        ? "O download está em apuração. Aguarde a confirmação."
+                        : "Preparando download da revisão salva."}
+              </strong>
+              {exportRevision && (
+                <span className="small muted">
+                  Revisão {exportRevision.slice(0, 8)}
+                </span>
+              )}
+              {exportOperation.state === "failed" && (
+                <p>
+                  {exportOperation.progress_message ||
+                    "Tente novamente pelo botão Baixar projeto."}
+                </p>
+              )}
+              {!!tracking.error && inProgress(exportOperation) && (
+                <p>
+                  Não foi possível atualizar o download. A solicitação foi
+                  preservada.{" "}
+                  <button className="text-button" onClick={tracking.refresh}>
+                    Atualizar estado do download
+                  </button>
+                </p>
+              )}
+            </div>
+            {exportOperation.state === "succeeded" && (
+              <a
+                className="button"
+                href={`/api/v1/exports/${encodeURIComponent(exportOperation.id)}/download`}
+              >
+                <Download size={16} aria-hidden="true" />
+                Baixar ZIP · revisão {exportRevision?.slice(0, 8)}
+              </a>
+            )}
+          </div>
+        )}
+        {!!draft.error && !draft.conflict && (
+          <button className="button" onClick={() => void act(draft.flush)}>
+            Tentar salvar rascunho
           </button>
-        </div>
-      )}
+        )}
+        {project.current_revision_id !== draft.data.base_revision_id && (
+          <div className="notice">
+            A revisão salva mudou. Seu rascunho foi preservado.{" "}
+            <button
+              className="button"
+              onClick={() =>
+                void act(async () => {
+                  const p = await api<Project>(`/projects/${pid}`);
+                  setRemote({
+                    project: p,
+                    files: await revisionFiles(pid, p.current_revision_id),
+                  });
+                })
+              }
+            >
+              Comparar versões
+            </button>
+          </div>
+        )}
+      </div>
       <div
         className="mobile-workspace-tabs"
+        hidden={!split.narrow}
         role="tablist"
         aria-label="Área do projeto"
       >
         {[
           ["code", "Código"],
-          ["preview", "Prévia"],
-          ["chat", "Construção"],
+          ["chat", "Chat"],
         ].map(([key, label]) => (
           <button
             key={key}
@@ -621,103 +1078,195 @@ export function ProjectWorkspace() {
           </button>
         ))}
       </div>
-      <div className={"ide-layout mobile-" + mobile}>
-        <section className="panel ide-panel">
-          <div className="ide-title">
-            <h1>{project.name}</h1>
-            <div
-              className="filter-tabs"
-              role="tablist"
-              aria-label="Visualização do projeto"
-            >
-              <button
-                role="tab"
-                aria-selected={tab === "code"}
-                className={tab === "code" ? "selected" : ""}
-                onClick={() => setTab("code")}
-              >
-                <Code2 size={16} />
-                Código
-              </button>
-              <button
-                role="tab"
-                aria-selected={tab === "preview"}
-                className={tab === "preview" ? "selected" : ""}
-                onClick={() => setTab("preview")}
-              >
-                <Eye size={16} />
-                Prévia
-              </button>
-            </div>
-          </div>
-          <div hidden={tab !== "code"}>
-            <ProjectEditor
-              files={files}
-              base={baseFiles}
-              selected={selected}
-              onSelect={setSelected}
-              readOnly={blocked || !!active}
-              onChange={(path, content) =>
-                draft.setData((d) => ({
-                  ...d,
-                  files: { ...(d.files ?? baseFiles), [path]: content },
-                }))
+      <div
+        ref={split.element}
+        style={split.style}
+        className={
+          "ide-layout mobile-" +
+          mobile +
+          (split.narrow ? " is-narrow" : "") +
+          (split.dragging ? " is-resizing" : "")
+        }
+      >
+        <section
+          className="panel ide-panel"
+          aria-label="Código e prévia do projeto"
+          hidden={split.narrow && mobile === "chat"}
+        >
+          <ProjectEditor
+            mode={tab}
+            menuActions={analysisAction}
+            toolbar={
+              <>
+                <div
+                  className="filter-tabs"
+                  role="tablist"
+                  aria-label="Visualização do projeto"
+                >
+                  <button
+                    role="tab"
+                    aria-label="Código"
+                    title="Código"
+                    aria-selected={tab === "code"}
+                    className={tab === "code" ? "selected" : ""}
+                    onClick={() => setTab("code")}
+                  >
+                    <Code2 size={16} />
+                    <span>Código</span>
+                  </button>
+                  <button
+                    role="tab"
+                    aria-label="Prévia"
+                    title="Prévia"
+                    aria-selected={tab === "preview"}
+                    className={tab === "preview" ? "selected" : ""}
+                    onClick={() => setTab("preview")}
+                  >
+                    <Eye size={16} />
+                    <span>Prévia</span>
+                  </button>
+                </div>
+                {analysisAction}
+                <button
+                  className="button workspace-save-button"
+                  title="Salvar revisão"
+                  aria-label="Salvar revisão"
+                  disabled={blocked || !dirty}
+                  onClick={() => void act(save)}
+                >
+                  <Save size={16} />
+                  <span>Salvar revisão</span>
+                </button>
+              </>
+            }
+            preview={
+              tab === "preview" ? (
+                caps.visual_preview?.enabled ? (
+                  <ProjectPreview
+                    files={files}
+                    dirty={dirty}
+                    onIssues={setPreviewIssues}
+                  />
+                ) : (
+                  <p className="notice">
+                    A prévia visual precisa da versão atualizada do backend.
+                    Recarregue após a atualização.
+                  </p>
+                )
+              ) : null
+            }
+            files={files}
+            base={baseFiles}
+            selected={selected}
+            onSelect={(path) => {
+              setSelected(path);
+              setTab("code");
+            }}
+            readOnly={blocked || !!active}
+            onChange={(path, content) => {
+              if (protectedMigration(path, baseFiles)) return;
+              draft.setData((d) => ({
+                ...d,
+                files: { ...(d.files ?? baseFiles), [path]: content },
+              }));
+            }}
+            onAdd={() => setNewFile("file")}
+            onAddMigration={() => setNewFile("migration")}
+            onRestoreMigration={() => {
+              if (
+                !(selected in baseFiles) ||
+                !protectedMigration(selected, baseFiles)
+              )
+                return;
+              draft.setData((d) => ({
+                ...d,
+                files: {
+                  ...(d.files ?? baseFiles),
+                  [selected]: baseFiles[selected],
+                },
+              }));
+            }}
+            onRemove={() => {
+              if (protectedMigration(selected, baseFiles)) return;
+              if (confirm("Remover " + selected + " do rascunho?")) {
+                const next = { ...files };
+                delete next[selected];
+                draft.setData((d) => ({ ...d, files: next }));
+                setSelected(Object.keys(next)[0] ?? "");
               }
-              onAdd={() => setNewFile(true)}
-              onRemove={() => {
-                if (confirm("Remover " + selected + " do rascunho?")) {
-                  const next = { ...files };
-                  delete next[selected];
-                  draft.setData((d) => ({ ...d, files: next }));
-                  setSelected(Object.keys(next)[0] ?? "");
-                }
-              }}
-            />
-          </div>
-          <div hidden={tab !== "preview"}>
-            {tab === "preview" &&
-              (caps.visual_preview?.enabled ? (
-                <ProjectPreview files={files} dirty={dirty} />
-              ) : (
-                <p className="notice">
-                  A prévia visual precisa da versão atualizada do backend.
-                  Recarregue após a atualização.
-                </p>
-              ))}
-          </div>
-          <div className="editor-footer">
-            <span className="small muted">
-              {dirty
-                ? "Rascunho recuperável · salve para criar uma revisão"
-                : "Revisão " + project.current_revision_id?.slice(0, 8)}
+            }}
+          />
+          <div className="workspace-ide-status">
+            <span>
+              {selected.split(".").at(-1)?.toUpperCase() || "Texto"} · UTF-8
             </span>
-            <button
-              className="button primary"
-              disabled={blocked || !dirty}
-              onClick={() => void act(save)}
-            >
-              <Save size={15} />
-              Salvar revisão
-            </button>
+            <span title={project.current_revision_id || "Sem revisão salva"}>
+              {dirty
+                ? "Rascunho alterado"
+                : project.current_revision_id
+                  ? "Revisão salva"
+                  : "Sem revisão salva"}
+            </span>
           </div>
-          <div className="learning-nudge compact">
-            <BookOpen size={23} />
-            <div>
-              <strong>Construa melhor, com método.</strong>
-              <p>Transforme sua ideia em um pedido claro e verificável.</p>
-            </div>
-            <Link to={`/app/aprendizado/sdd?project=${pid}`}>
-              Explorar guias →
-            </Link>
-          </div>
+          <p
+            id="code-analysis-entry-reason"
+            className={
+              analysisBlocked || dirty || !project.current_revision_id
+                ? "workspace-analysis-reason small"
+                : "sr-only"
+            }
+          >
+            {analysisReason}
+          </p>
         </section>
-        <section className="panel conversation-panel">
+        <div
+          className="workbench-separator"
+          hidden={split.narrow}
+          {...split.separator}
+        >
+          <span />
+        </div>
+        <section
+          className="panel conversation-panel"
+          ref={conversationPanel}
+          aria-label="Construir com IA"
+          hidden={split.narrow && mobile !== "chat"}
+        >
           <div className="card-title">
             <h2>
               <MessageSquare size={19} />
               Construir com IA
             </h2>
-            <span className="small muted">Pedido do projeto</span>
+            <WorkspaceMenu
+              label="Histórico e ações da conversa"
+              icon={<History size={19} aria-hidden="true" />}
+            >
+              <button
+                className="button"
+                onClick={() => {
+                  setMobile("chat");
+                  setConversationRequest((request) => request + 1);
+                }}
+              >
+                Histórico de construções e propostas
+              </button>
+              {tracking.cursor && (
+                <button
+                  className="button"
+                  disabled={tracking.loadingMore}
+                  onClick={tracking.loadMore}
+                >
+                  Conversas anteriores
+                </button>
+              )}
+              <button
+                className="button"
+                disabled={blocked || tracking.loading || !!tracking.error}
+                onClick={() => setNewRequestRequest((request) => request + 1)}
+              >
+                Pedido do projeto
+              </button>
+            </WorkspaceMenu>
           </div>
           {!!tracking.error && (
             <div className="notice" role="alert">
@@ -737,21 +1286,29 @@ export function ProjectWorkspace() {
             canWrite={canWrite}
             blocked={blocked || tracking.loading || !!tracking.error}
             active={!!active}
+            conversationRequest={conversationRequest}
+            newRequestRequest={newRequestRequest}
+            onConversationReady={focusConversation}
             hasHistory={tracking.items.some((o) => o.type === "generation")}
-            pendingProposal={tracking.items.some(
-              (o) =>
-                o.type === "generation" &&
-                o.state === "succeeded" &&
-                o.result_ref.candidate &&
-                !o.result_ref.applied_revision_id &&
-                !o.result_ref.discarded_at,
-            )}
+            pendingProposal={pendingProposal}
             reuseRequest={reuseRequest}
             onReused={() => setReuseRequest(null)}
             replyTo={replyTo}
             replyText={replyText}
             replyFocusRequest={replyFocusRequest}
-            onNewRequest={() => setReplyTo(null)}
+            onNewRequest={() => {
+              setReplyTo(null);
+              if (requestedConversation || showAnalysis)
+                setSearchParams(
+                  (previous) => {
+                    const next = new URLSearchParams(previous);
+                    next.delete("conversation");
+                    next.delete("analysis");
+                    return next;
+                  },
+                  { replace: true },
+                );
+            }}
             contextRevision={project.current_revision_id}
             contextDirty={dirty}
             onSaveContext={async () => {
@@ -801,12 +1358,38 @@ export function ProjectWorkspace() {
             }}
           >
             <BuildConversation
-              operations={tracking.items}
+              operations={conversationOperations}
               pid={pid}
               busy={busy}
               syncedAt={tracking.syncedAt}
               loadedRevision={project.current_revision_id}
               followRequest={followRequest}
+              analysisContent={
+                showAnalysis ? (
+                  <CodeAnalysisContent
+                    projectId={pid}
+                    revisionId={project.current_revision_id}
+                    source={previewIssues.length ? "preview" : "editor"}
+                    analysis={codeAnalysis}
+                    dirty={dirty}
+                    blocked={analysisBlocked || pendingProposal}
+                    onCorrectionAccepted={openConversation}
+                  />
+                ) : undefined
+              }
+              correctionBlockedReason={
+                !canWrite
+                  ? "Seu acesso não permite solicitar uma correção."
+                  : dirty
+                    ? "Salve as alterações da revisão antes de solicitar outra correção."
+                    : blocked ||
+                        pendingProposal ||
+                        project.current_revision_id !==
+                          draft.data.base_revision_id
+                      ? "Conclua a operação atual ou resolva o conflito do rascunho antes de tentar novamente."
+                      : ""
+              }
+              onRetryCorrection={(operation) => void retryCorrection(operation)}
               onCancel={(op) =>
                 void act(async () => {
                   tracking.accept(
@@ -838,30 +1421,8 @@ export function ProjectWorkspace() {
               }}
             />
           </GuidedBuildPanel>
-          {tracking.cursor && (
-            <button
-              className="text-button"
-              disabled={tracking.loadingMore}
-              onClick={tracking.loadMore}
-            >
-              Conversas anteriores
-            </button>
-          )}
         </section>
       </div>
-      {downloads.length > 0 && (
-        <div className="actions">
-          {downloads.map((op) => (
-            <a
-              className="button"
-              key={op.id}
-              href={`/api/v1/exports/${op.id}/download`}
-            >
-              Baixar ZIP · revisão {op.result_ref.revision_id?.slice(0, 8)}
-            </a>
-          ))}
-        </div>
-      )}
       <WorkspaceDialogs
         {...{
           review,

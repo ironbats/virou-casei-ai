@@ -139,7 +139,7 @@ test("ideia, seleção automática, edição, autosave, snapshot e aplicação e
   for (const width of [320, 375, 768, 1440]) {
     await page.setViewportSize({ width, height: 900 });
     if (width <= 900)
-      await page.getByRole("tab", { name: "Construção", exact: true }).click();
+      await page.getByRole("tab", { name: "Chat", exact: true }).click();
     expect(
       await page.evaluate(
         () => document.documentElement.scrollWidth <= innerWidth,

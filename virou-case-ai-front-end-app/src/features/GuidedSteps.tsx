@@ -11,7 +11,9 @@ export function GuidedSteps({
 }) {
   return (
     <>
-      <div className="guided-progress-label">Etapa {stageNumber} de 3</div>
+      <div className="guided-progress-label">
+        {stageNumber > 3 ? "Preparação concluída" : `Etapa ${stageNumber} de 3`}
+      </div>
       <ol className="guided-steps" aria-label="Etapas de preparação">
         {["Ideia", "Templates", "Revisão"].map((label, index) => {
           const completed = index + 1 < stageNumber;

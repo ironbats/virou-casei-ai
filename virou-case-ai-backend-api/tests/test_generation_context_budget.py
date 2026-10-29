@@ -14,6 +14,7 @@ from viracase.infrastructure.guided_build import GuidedBuild
 from viracase.infrastructure.integrations import Integrations
 from viracase.infrastructure.learning import LearningLibrary
 from viracase.infrastructure.models import Attempt, Operation, Reservation
+from viracase.infrastructure.publication_migration_context import published_migration_context
 from viracase.infrastructure.worker import Worker
 from viracase.interfaces.feature_schemas import BuildPolicy
 
@@ -260,8 +261,24 @@ def test_repair_instructions_do_not_reject_an_already_accepted_request_at_its_ca
         actor, "bounded-request", {"name": "Padaria", "objective": "Melhorar a vitrine"}
     )
     brief = "Melhorar a vitrine com preços e compra autenticada. " * 200
-    request_cap = len(turn_prompt(project, brief, {}, max_batches=MAX_GENERATION_CALLS).encode())
+    with repo.sessions() as db:
+        current = repo.owned_project(db, actor, project["id"])
+        files = repo.sources.read(
+            repo.owned_revision(db, actor, project["id"], project["current_revision_id"]), current.stack
+        )
+        migrations = published_migration_context(repo, db, current, files)
+    prompt = turn_prompt(
+        project, brief, {}, max_batches=MAX_GENERATION_CALLS, published_migrations=migrations
+    )
+    request_cap = len(prompt.encode()) - len(json.dumps(migrations, ensure_ascii=False).encode()) + 2
     assert 10000 < request_cap < 60000
+    with pytest.raises(RuleError) as caught:
+        turn_prompt(
+            project, brief, {}, max_batches=MAX_GENERATION_CALLS,
+            published_migrations=migrations, request_limit_bytes=request_cap - 1,
+        )
+    assert caught.value.details["reason_code"] == "REQUEST_CONTEXT_LIMIT"
+    assert caught.value.details["request_context_bytes"] == request_cap
 
     class RepairGateway:
         def __init__(self):

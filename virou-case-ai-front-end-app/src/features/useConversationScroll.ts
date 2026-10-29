@@ -7,10 +7,24 @@ export function useConversationScroll(followRequest: number) {
   const content = useRef<HTMLDivElement>(null);
   const following = useRef(true);
   const previousTop = useRef(0);
+  const anchor = useRef<{ node: Element; offset: number } | null>(null);
+
+  const rememberAnchor = useCallback(() => {
+    const element = viewport.current;
+    if (!element || !element.clientHeight) return;
+    const bounds = element.getBoundingClientRect();
+    const node = Array.from(content.current?.children || []).find(
+      (item) => item.getBoundingClientRect().bottom > bounds.top + 1,
+    );
+    anchor.current = node
+      ? { node, offset: node.getBoundingClientRect().top - bounds.top }
+      : null;
+  }, []);
   const [awayFromLatest, setAwayFromLatest] = useState(false);
 
   const scrollToLatest = useCallback(() => {
     following.current = true;
+    anchor.current = null;
     setAwayFromLatest(false);
     const element = viewport.current;
     if (!element || !element.clientHeight) return;
@@ -29,7 +43,8 @@ export function useConversationScroll(followRequest: number) {
       following.current = false;
     previousTop.current = element.scrollTop;
     setAwayFromLatest(!following.current && !nearBottom);
-  }, []);
+    if (!following.current) rememberAnchor();
+  }, [rememberAnchor]);
 
   useLayoutEffect(() => {
     scrollToLatest();
@@ -45,11 +60,22 @@ export function useConversationScroll(followRequest: number) {
       frame = requestAnimationFrame(() => {
         if (!element.clientHeight) return;
         if (following.current) scrollToLatest();
-        else
+        else {
+          const saved = anchor.current;
+          if (saved?.node.isConnected && messages.contains(saved.node)) {
+            const displacement =
+              saved.node.getBoundingClientRect().top -
+              element.getBoundingClientRect().top -
+              saved.offset;
+            if (Math.abs(displacement) > 1) element.scrollTop += displacement;
+            previousTop.current = element.scrollTop;
+          }
+          rememberAnchor();
           setAwayFromLatest(
             element.scrollHeight - element.scrollTop - element.clientHeight >
               bottomThreshold,
           );
+        }
       });
     });
     observer.observe(element);
@@ -58,7 +84,7 @@ export function useConversationScroll(followRequest: number) {
       observer.disconnect();
       cancelAnimationFrame(frame);
     };
-  }, [scrollToLatest]);
+  }, [scrollToLatest, rememberAnchor]);
 
   return { viewport, content, onScroll, scrollToLatest, awayFromLatest };
 }

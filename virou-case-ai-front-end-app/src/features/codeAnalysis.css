@@ -1,0 +1,129 @@
+.code-analysis {
+  padding: 20px;
+  margin: 20px 0 0;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  min-width: 0;
+  overflow-wrap: anywhere;
+  background: var(--surface);
+}
+.code-analysis-entry {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 12px;
+  padding: 12px 16px;
+  border-top: 1px solid var(--line);
+}
+.code-analysis-entry p {
+  flex: 1 1 180px;
+  margin: 0;
+}
+.code-analysis-entry .button {
+  min-height: 44px;
+  white-space: normal;
+}
+.build-conversation .code-analysis {
+  margin-top: 0;
+  border: 0;
+  padding: 8px 4px;
+}
+.build-conversation .code-analysis-issues > li {
+  padding: 12px;
+}
+.code-correction-label {
+  display: block;
+  color: var(--muted);
+  font-size: 12px;
+  margin-top: 4px;
+}
+.code-analysis-heading,
+.code-analysis-heading h3,
+.code-analysis-issue-heading {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.code-analysis-heading,
+.code-analysis-issue-heading {
+  flex-wrap: wrap;
+  justify-content: space-between;
+}
+.code-analysis-heading > div {
+  min-width: 0;
+  flex: 1 1 240px;
+}
+.code-analysis h3,
+.code-analysis h4 {
+  font-family: inherit;
+  font-size: 15px;
+  letter-spacing: 0;
+  margin: 0 0 8px;
+}
+.code-analysis p {
+  margin: 8px 0;
+}
+.code-analysis .button,
+.code-analysis .text-button {
+  min-height: 44px;
+}
+.code-analysis-heading svg {
+  flex-shrink: 0;
+}
+.code-analysis-result,
+.code-analysis-correction {
+  border-top: 1px solid var(--line);
+  padding-top: 16px;
+  margin-top: 16px;
+}
+.code-analysis-text {
+  white-space: pre-wrap;
+}
+.code-analysis-reference {
+  display: block;
+  margin-top: 8px;
+  font-size: 12px;
+}
+.code-analysis-issues {
+  list-style: none;
+  padding: 0;
+  display: grid;
+  gap: 12px;
+}
+.code-analysis-issues > li {
+  min-width: 0;
+  padding: 16px;
+  border: 1px solid var(--line);
+  border-left: 3px solid var(--navy);
+  border-radius: 8px;
+}
+.code-analysis-issues > li[data-severity="error"] {
+  border-left-color: var(--error);
+}
+.code-analysis-issue-heading > span,
+.code-analysis-location {
+  color: var(--muted);
+  font-size: 12px;
+}
+.code-analysis-location {
+  font-family: ui-monospace, monospace;
+}
+.code-analysis .code-analysis-limitations {
+  display: block;
+}
+.code-analysis-limitations ul {
+  margin: 8px 0 0;
+  padding-left: 20px;
+}
+@media (max-width: 600px) {
+  .code-analysis {
+    padding: 16px;
+  }
+  .code-analysis-heading > .button,
+  .code-analysis-result > .button,
+  .code-analysis-correction > .button {
+    width: 100%;
+    white-space: normal;
+  }
+}

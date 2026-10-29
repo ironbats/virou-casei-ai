@@ -55,11 +55,21 @@ export async function command<T>(
   payload: unknown = {},
   method = "POST",
   version?: number,
+  intent?: string,
+  signal?: AbortSignal,
 ): Promise<T> {
+  signal?.throwIfAborted();
   const body = JSON.stringify(payload);
   const digest = await crypto.subtle.digest(
     "SHA-256",
-    new TextEncoder().encode(actor + method + path + body + (version ?? "")),
+    new TextEncoder().encode(
+      actor +
+        method +
+        path +
+        body +
+        (version ?? "") +
+        (intent ? `\n${intent}` : ""),
+    ),
   );
   const slot =
     "vira-intent:" +
@@ -71,11 +81,13 @@ export async function command<T>(
   const result = await api<T>(path, {
     method,
     body,
+    signal,
     headers: {
       "Idempotency-Key": key,
       ...(version === undefined ? {} : { "If-Match": `"${version}"` }),
     },
   });
+  signal?.throwIfAborted();
   sessionStorage.removeItem(slot);
   return result;
 }

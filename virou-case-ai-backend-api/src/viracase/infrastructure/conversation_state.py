@@ -11,6 +11,8 @@ from viracase.infrastructure.clarifications import continuation_context, continu
 from viracase.infrastructure.drafts import Drafts
 from viracase.infrastructure.guided_build import attachment_context
 from viracase.infrastructure.models import Operation
+from viracase.infrastructure.publication_migration_context import published_migration_context
+from viracase.infrastructure.repository_dto import operation_request_text
 from viracase.infrastructure.workflow_logging import emit as emit_workflow
 
 
@@ -19,6 +21,7 @@ def prepare_turn(repo, db, operation, project):
 
     base = operation.payload["base_revision_id"]
     files = repo.sources.read(repo.owned_revision(db, operation.account_id, project.id, base), project.stack)
+    baseline_files = dict(files)
     drafts = Drafts(repo, None)
     draft = drafts.row(db, operation.account_id, "project", project.id)
     if (
@@ -37,6 +40,8 @@ def prepare_turn(repo, db, operation, project):
         context = recent_history(db, operation.account_id, project.id)
         operation.payload = {**operation.payload, "history": context, "project_version": project.version}
     try:
+        migrations = published_migration_context(repo, db, project, files, base_revision_id=base, baseline_files=baseline_files)
+        operation.payload = {**operation.payload, "publication_migration_context": migrations}
         prompt = turn_prompt(
             project_dto(project),
             attachment_context(operation.payload),
@@ -51,6 +56,8 @@ def prepare_turn(repo, db, operation, project):
             request_limit_bytes=operation.payload.get("context_limit_bytes", 60000)
             if operation.policy.get("generation_context_version") == 2
             else None,
+            allow_deletions=bool(operation.payload.get("analysis_id")),
+            published_migrations=migrations,
         )
         if (
             operation.policy.get("generation_context_version") != 2
@@ -91,7 +98,7 @@ def recent_history(db, actor, pid):
     ).all()
     return [
         {
-            "request": item.payload.get("brief", "")[:3000],
+            "request": (operation_request_text(item) or "")[:3000],
             "response": item.result.get("message", "")[:2000],
             "outcome": item.result.get("kind") or item.state,
             "applied": bool(
@@ -135,6 +142,7 @@ def save_turn(repo, db, operation, project, files, original, changed, message):
         "candidate": revision.candidate,
         "changed_files": changed,
         "validation": "structure_checked",
+        **revision.migration_evidence,
     }
     if operation.payload.get("review_required") and not conflict:
         return "proposal_ready"

@@ -47,6 +47,25 @@ class PublicationService:
             reasons.append("LIFECYCLE_LOCKED")
         return list(dict.fromkeys(reasons))
 
+    def configuration_message(self, row, code):
+        from viracase.infrastructure.publication_maintenance import TRANSIENT_FAILURES, automatic_status
+
+        if (
+            code in {"CONFIGURATION_INVALID", "CAPABILITY_UNVALIDATED"}
+            and row and row.state == "active" and row.validation.get("ready")
+            and not row.validation.get("publication_check_blocked")
+            and row.validation.get("automatic_verification")
+        ):
+            automatic = automatic_status(self.repo, row, self.builder, public=True)
+            if automatic["enabled"] and automatic["last_error_code"] in TRANSIENT_FAILURES | {None}:
+                if automatic["state"] in {"queued", "running"}:
+                    return "A publicação aguarda a conclusão da verificação automática da Cloudflare."
+                if automatic["state"] == "scheduled":
+                    return "A publicação aguarda a próxima verificação automática da Cloudflare."
+                if automatic["state"] == "retry_wait":
+                    return automatic["message"]
+        return MESSAGES[code]
+
     def capability(self):
         with self.repo.sessions() as db:
             rows = self.registry.current_rows(db, "cloudflare").values()
@@ -58,7 +77,8 @@ class PublicationService:
             return {
                 "enabled": not reasons,
                 "reason_code": reasons[0] if reasons else None,
-                "message": MESSAGES[reasons[0]] if reasons else "Publicação disponível.",
+                "message": self.configuration_message(self.registry.latest(db, "cloudflare"), reasons[0])
+                if reasons else "Publicação disponível.",
             }
 
     def readiness(self, actor, pid, revision=None):
@@ -69,6 +89,8 @@ class PublicationService:
             return self.inspect(db, a, p, revision or p.current_revision_id)
 
     def inspect(self, db, account, project, revision, exclude_operation=None):
+        from viracase.infrastructure.publication_maintenance import automatic_status
+
         row = self.registry.for_project(db, project.id)
         reasons = self.configuration_reasons(row, project.stack)
         if "publish" not in self.repo.access(db, account)["allowed_actions"]:
@@ -81,14 +103,15 @@ class PublicationService:
             r = self.repo.owned_revision(db, account.id, project.id, revision)
             if r.candidate:
                 reasons.append("ARTIFACT_NOT_READY")
-        query = select(Operation.id).where(
+        query = select(Operation).where(
             Operation.project_id == project.id,
             Operation.type == "publication",
             Operation.state.in_(["queued", "running", "reconciling"]),
         )
         if exclude_operation:
             query = query.where(Operation.id != exclude_operation)
-        if db.scalar(query):
+        active_operation = db.scalar(query.limit(1))
+        if active_operation:
             reasons.append("OPERATION_CONFLICT")
         resource = db.get(PublicationResource, project.id)
         if row:
@@ -123,7 +146,10 @@ class PublicationService:
             "can_publish": not reasons,
             "revision_id": revision,
             "configuration_version": row.version if row else None,
-            "reasons": [{"code": code, "message": MESSAGES[code]} for code in dict.fromkeys(reasons)],
+            "automatic_verification": automatic_status(self.repo, row, self.builder, public=True),
+            "reasons": [{"code": code, "message": self.operation_conflict_message(active_operation)
+                         if code == "OPERATION_CONFLICT" else self.configuration_message(row, code)}
+                        for code in dict.fromkeys(reasons)],
             "publication": {
                 "url": resource.inventory.get("url"),
                 "revision_id": resource.inventory.get("published_revision_id"),
@@ -132,6 +158,20 @@ class PublicationService:
             if resource
             else None,
         }
+
+    @staticmethod
+    def operation_conflict_message(operation):
+        if not operation or operation.state != "reconciling":
+            return MESSAGES["OPERATION_CONFLICT"]
+        recovery = operation.result.get("publication_recovery") or {}
+        code = recovery.get("last_error_code") or operation.error_code
+        if code == "MIGRATION_RECEIPT_PENDING":
+            return "O SQL da tentativa anterior foi confirmado, mas seu recibo ainda precisa ser validado. Novo envio permanece bloqueado."
+        if code in {"MIGRATION_RESULT_UNKNOWN", "MIGRATION_CHECKSUM_CONFLICT"}:
+            return "O resultado ou o histórico da migration da tentativa anterior precisa de confirmação antes de outro envio."
+        if recovery.get("state") == "attention":
+            return "A recuperação automática foi interrompida. Consulte o impedimento atual; o resultado anterior ainda não foi confirmado."
+        return "O resultado da tentativa anterior está sendo conferido. Aguarde a confirmação antes de publicar novamente."
 
     def start(self, actor, pid, key, payload):
         def command(db, a):
@@ -161,6 +201,11 @@ class PublicationService:
             if concurrent >= row.settings["max_concurrent"]:
                 raise RuleError("QUOTA_EXCEEDED", "Aguarde a publicação em andamento antes de tentar.", 429)
             revision = self.repo.owned_revision(db, actor, pid, payload["revision_id"])
+            from viracase.infrastructure.publication_migration_context import (
+                migration_validation_for_revision,
+            )
+
+            migration_validation = migration_validation_for_revision(db, actor, revision.id)
             resource = db.get(PublicationResource, pid)
             if not resource:
                 resource = PublicationResource(
@@ -183,6 +228,7 @@ class PublicationService:
                     "source_hash": revision.source_hash,
                     "entitlement_version": a.entitlement_version,
                 },
+                result={"migration_validation": migration_validation} if migration_validation else {},
             )
             db.add(op)
             db.flush()

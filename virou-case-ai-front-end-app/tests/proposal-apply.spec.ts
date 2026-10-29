@@ -1,6 +1,11 @@
 import { expect, test, type Page } from "@playwright/test";
 import { productionPolicy } from "./productionPolicy";
-import { reviewRequest, showBuildHistory, workspace } from "./workspaceHelper";
+import {
+  editorAction,
+  reviewRequest,
+  showBuildHistory,
+  workspace,
+} from "./workspaceHelper";
 
 test.skip(
   process.env.VIRA_E2E_WORKSPACE !== "true",
@@ -118,7 +123,7 @@ test("recarregar durante a confirmação restaura a revisão aplicada sem um seg
   await expect(
     page.getByRole("tree", { name: "Arquivos do projeto" }),
   ).toBeVisible();
-  await page.getByRole("button", { name: "Usar texto simples" }).click();
+  await editorAction(page, "Usar texto simples");
   await expect(page.locator(".code-editor")).toHaveValue(/Alteração E2E/);
   const state = await appliedState(page, project.id, operation);
   expect(mutations).toBe(1);

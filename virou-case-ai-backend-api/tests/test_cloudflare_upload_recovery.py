@@ -5,6 +5,7 @@ import pytest
 
 from viracase.domain.rules import RuleError
 from viracase.infrastructure.cloudflare_gateway import CloudflareGateway, PublicationUncertain
+from viracase.infrastructure.publication_d1_diagnostics import sanitize_provider_diagnostic
 from viracase.infrastructure.publication_verification import failure_record
 
 POLICY = {
@@ -195,3 +196,54 @@ def test_invalid_read_response_stays_a_dependency_failure():
         gateway.request("GET", gateway.account_path)
     assert caught.value.code == "DEPENDENCY_UNAVAILABLE"
     assert "private-invalid-response" not in str(caught.value.provider_diagnostic)
+
+
+@pytest.mark.parametrize(
+    "exception,outcome",
+    [
+        (httpx.ConnectError, "not_sent"), (httpx.ConnectTimeout, "not_sent"),
+        (httpx.PoolTimeout, "not_sent"), (httpx.ReadTimeout, "unknown"), (httpx.WriteError, "unknown"),
+    ],
+)
+def test_put_transport_failure_preserves_dispatch_evidence(exception, outcome):
+    def fail(request):
+        raise exception("private transport details", request=request)
+
+    gateway = CloudflareGateway(POLICY, "private-token", httpx.MockTransport(fail))
+    with pytest.raises(PublicationUncertain) as caught:
+        gateway.request("PUT", gateway.account_path + "/workers/scripts/test-worker", json={})
+    diagnostic = failure_record(caught.value, "publication_uploading")
+    assert diagnostic["provider"]["method"] == "PUT"
+    assert diagnostic["provider"]["effect_outcome"] == outcome
+    assert diagnostic["provider"]["transport_error"] == exception.__name__
+    assert "private" not in str(diagnostic)
+
+
+def test_upload_confirmation_sanitizer_preserves_bounded_observations_without_raw_data():
+    value = {
+        "upload_confirmation": {
+            "confirmed": False, "duration_ms": 31000, "secret": "private-token",
+            "attempts": [
+                {"attempt": index, "confirmed": False, "code": "BINDINGS_NOT_VISIBLE", "retryable": True, "new_deployments": 1, "duration_ms": 250, "body": "private body"}
+                for index in range(1, 15)
+            ],
+        },
+    }
+    result = sanitize_provider_diagnostic(value)["upload_confirmation"]
+    assert result["confirmed"] is False and result["duration_ms"] == 31000
+    assert len(result["attempts"]) == 12
+    assert result["attempts"][0] == {"attempt": 1, "confirmed": False, "code": "BINDINGS_NOT_VISIBLE", "retryable": True, "new_deployments": 1, "duration_ms": 250}
+    assert "private" not in str(result)
+
+
+def test_upload_confirmation_sanitizer_rejects_malformed_fields_and_unknown_codes():
+    result = sanitize_provider_diagnostic({"upload_confirmation": {
+        "confirmed": False, "duration_ms": -1,
+        "attempts": [
+            {"attempt": 1, "confirmed": False, "code": "private-sensitive-message", "new_deployments": True, "retryable": "yes"},
+            {"attempt": True, "confirmed": False, "code": "BINDINGS_MISMATCH"},
+            {"attempt": 2, "confirmed": "yes", "code": "BINDINGS_MISMATCH"},
+        ],
+    }})["upload_confirmation"]
+    assert result == {"confirmed": False, "attempts": [{"attempt": 1, "confirmed": False, "code": "OBSERVATION_FAILED"}]}
+    assert sanitize_provider_diagnostic({"upload_confirmation": {"confirmed": []}}) == {}

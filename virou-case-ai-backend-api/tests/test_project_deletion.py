@@ -4,7 +4,7 @@ from sqlalchemy import func, select
 
 from viracase.domain.rules import RuleError
 from viracase.infrastructure.drafts import Drafts
-from viracase.infrastructure.models import Audit, Job, Operation, Project, Revision
+from viracase.infrastructure.models import Audit, Draft, Job, Operation, Project, Revision
 from viracase.infrastructure.project_deletion import request_deletion
 from viracase.infrastructure.worker import Worker
 from viracase.interfaces.api import create_app
@@ -21,6 +21,10 @@ def project(system, actor=None, key="p"):
 def test_deletion_is_owned_versioned_idempotent_and_releases_quota_only_after_cleanup(system):
     repo, actor = system["repo"], system["users"][0]
     p, other = project(system), project(system, key="p2")
+    with repo.sessions() as db:
+        assert db.scalar(select(Draft.id).where(
+            Draft.account_id == actor, Draft.kind == "migration_plan", Draft.target == p["current_revision_id"],
+        ))
     before = repo.wallet(actor, True)
     draft = Drafts(repo, None)
     draft.save(
@@ -62,6 +66,12 @@ def test_deletion_is_owned_versioned_idempotent_and_releases_quota_only_after_cl
     with repo.sessions() as db:
         assert db.get(Project, p["id"]).state == "deleted"
         assert not db.scalar(select(func.count()).select_from(Revision).where(Revision.project_id == p["id"]))
+        assert not db.scalar(select(Draft.id).where(
+            Draft.account_id == actor, Draft.kind == "migration_plan", Draft.target == p["current_revision_id"],
+        ))
+        assert db.scalar(select(Draft.id).where(
+            Draft.account_id == actor, Draft.kind == "migration_plan", Draft.target == other["current_revision_id"],
+        ))
         assert db.scalar(
             select(Audit.id).where(Audit.action == "project:deleted", Audit.resource_id == p["id"])
         )

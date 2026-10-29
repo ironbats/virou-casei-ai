@@ -60,6 +60,94 @@ export type PublicationBuildDiagnostic = {
     column?: number;
   }[];
 };
+export type CodeAnalysisIssue = {
+  severity: "error" | "warning" | "info";
+  path: string | null;
+  line: number | null;
+  title: string;
+  explanation: string;
+  suggestion: string;
+};
+export type PublicationMigrationDiagnostic = {
+  format_version: 1;
+  category: "migration";
+  code: string;
+  analysis_method?: "sql_lexical_v2";
+  issues: {
+    code: string;
+    reason: string;
+    path?: string;
+    line?: number;
+    column?: number;
+    statement_index?: number;
+    statement_type?: string;
+    operation?: string;
+    rule?: string;
+    explanation?: string;
+    expected_sha256?: string;
+    actual_sha256?: string | null;
+    receipt_source: "inventory" | "remote" | "candidate";
+    message: string;
+    hint: string;
+  }[];
+  issue_count: number;
+  published_revision_id?: string;
+};
+export type PublicationProviderDiagnostic = {
+  method?: string;
+  route?: string;
+  status?: number;
+  provider_error_codes?: number[];
+  cf_ray?: string;
+  reason?: string;
+  message?: string;
+  statement_index?: number;
+  line?: number;
+  effect_outcome?: string;
+};
+export type PublicationDiagnostic = {
+  version: 1;
+  detail_available?: boolean;
+  phase?: string;
+  migration?: { name: string; sha256?: string };
+  effect_status?: "not_sent" | "unknown" | "confirmed" | "none";
+  initial_error?: {
+    code: string;
+    message?: string;
+    provider?: PublicationProviderDiagnostic;
+  };
+};
+export type MigrationHistory = {
+  format_version: 1;
+  policy_version: string;
+  base_revision_id: string | null;
+  preserved: { path: string; sha256: string }[];
+  added: { path: string; sha256: string }[];
+};
+export type MigrationFailure = {
+  code: string;
+  message?: string;
+  base_revision_id?: string | null;
+  migration_history?: {
+    format_version: 1;
+    base_revision_id?: string | null;
+    operation?: string;
+    issue_count?: number;
+    issues: { path?: string; operation?: string; after_path?: string }[];
+  };
+  migration?: {
+    format_version?: number;
+    issue_count?: number;
+    issues: {
+      path?: string;
+      statement_index?: number;
+      line?: number;
+      column?: number;
+      message?: string;
+      hint?: string;
+    }[];
+  };
+};
 export type Operation = {
   id: string;
   type: string;
@@ -72,6 +160,8 @@ export type Operation = {
   error_code: string | null;
   model_label?: string | null;
   request_text?: string | null;
+  analysis_id?: string;
+  analysis_revision_id?: string;
   reply_to?: string | null;
   progress_message?: string;
   activity?: { stage: string; at: string; message: string }[];
@@ -85,17 +175,48 @@ export type Operation = {
     content_hash: string;
   }[];
   result_ref: {
+    migration_failure?: MigrationFailure;
+    publication_diagnostic?: PublicationDiagnostic;
+    publication_recovery?: {
+      version?: number;
+      last_error_message?: string | null;
+      reason?: string | null;
+      required_action?: string | null;
+      owner?: "user" | "operator" | "platform";
+      missing_evidence?: string[];
+      state: "scheduled" | "running" | "retry_wait" | "attention" | "resolved";
+      message: string;
+      attempts: number;
+      last_attempt_at: string | null;
+      last_checked_at: string | null;
+      next_attempt_at: string | null;
+      last_error_code: string | null;
+      resolution?:
+        | "pre_upload_failure"
+        | "published"
+        | "resume_safe"
+        | "migration_rejected"
+        | "not_sent";
+    };
     publication_failure?: {
       code?: string;
       message?: string;
       stage?: string;
       at?: string;
       build?: PublicationBuildDiagnostic;
+      migration?: PublicationMigrationDiagnostic;
     };
     discarded_at?: string;
     url?: string;
     verified_at?: string;
-    kind?: "implementation" | "clarification";
+    kind?: "implementation" | "clarification" | "code_analysis";
+    source?: "publication" | "preview" | "editor";
+    publication_operation_id?: string | null;
+    correction_operation_id?: string;
+    summary?: string;
+    issues?: CodeAnalysisIssue[];
+    limitations?: string[];
+    can_request_correction?: boolean;
     message?: string;
     apply_conflict?: boolean;
     working_files?: string[];
@@ -137,6 +258,7 @@ export type Capabilities = {
   };
   policy_version: string;
   generation: Capability;
+  code_analysis?: Capability;
   template_preparation?: Capability;
   publication: Capability;
   preview: Capability;

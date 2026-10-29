@@ -39,6 +39,19 @@ const ready = {
 const diagnosticPath =
   "**/admin-api/v1/integration-connections/connection-test/publication-diagnostics";
 
+const automatic = {
+  enabled: true,
+  state: "scheduled",
+  message:
+    "A conexão é verificada automaticamente antes do vencimento da validação.",
+  next_attempt_at: "2026-10-29T12:00:00Z",
+  last_attempt_at: "2026-10-28T15:00:00Z",
+  last_succeeded_at: "2026-10-28T15:01:00Z",
+  last_error_code: null,
+  consecutive_failures: 0,
+  operation_id: "check-automatic",
+};
+
 async function open(
   page: Page,
   diagnostic: unknown = ready,
@@ -157,6 +170,151 @@ test("visão geral concisa, navegação por teclado e layout de 320 a 1440 pixel
       exact: true,
     }),
   ).toBeFocused();
+});
+
+test("renovação automática mantém publicação válida e recupera expiração por polling sem POST manual", async ({
+  page,
+}) => {
+  await page.clock.install();
+  let posts = 0;
+  page.on("request", (request) => {
+    if (request.method() === "POST") posts += 1;
+  });
+  await open(page, {
+    ...ready,
+    automatic_verification: { ...automatic, state: "running" },
+    verification: { ...ready.verification, state: "running" },
+  });
+  const overview = page.getByRole("tabpanel", {
+    name: "Visão geral",
+    exact: true,
+  });
+  const renewal = overview.getByRole("region", {
+    name: "Renovação automática da publicação",
+  });
+  await expect(
+    overview.getByText("Publicação liberada", { exact: true }),
+  ).toBeVisible();
+  await expect(renewal).toContainText("enquanto ela permanecer válida");
+  await expect(renewal).toContainText("Última verificação aprovada");
+  let current = {
+    ...ready,
+    can_publish: false,
+    automatic_verification: { ...automatic, state: "queued" },
+    verification: { ...ready.verification, state: "queued" },
+  };
+  await page.unroute(diagnosticPath);
+  await page.route(diagnosticPath, (route) => route.fulfill({ json: current }));
+  await page.clock.runFor(4001);
+  await expect(
+    overview.getByText("Publicação liberada", { exact: true }),
+  ).toHaveCount(0);
+  await expect(renewal).not.toContainText("enquanto ela permanecer válida");
+  current = {
+    ...ready,
+    automatic_verification: automatic,
+  };
+  await page.clock.runFor(4001);
+  await expect(
+    overview.getByText("Publicação liberada", { exact: true }),
+  ).toBeVisible();
+  await expect(renewal).toContainText("Verificação automática programada");
+  await tab(page, "Verificação");
+  const verification = page.getByRole("tabpanel", {
+    name: "Verificação",
+    exact: true,
+  });
+  await expect(verification).toContainText(
+    "Esta verificação valida a conexão e os perfis.",
+  );
+  await expect(verification).toContainText(
+    "o resultado de cada projeto são conferidos na própria publicação.",
+  );
+  await expect(verification).toContainText("não exige verificações manuais");
+  expect(posts).toBe(0);
+});
+
+test("renovação expõe próxima tentativa e falha sem anunciar publicação liberada", async ({
+  page,
+}) => {
+  await open(page, {
+    ...ready,
+    can_publish: false,
+    reasons: [
+      {
+        code: "CONFIGURATION_INVALID",
+        message: "Token inválido ou sem permissão.",
+      },
+    ],
+    automatic_verification: {
+      ...automatic,
+      state: "retry_wait",
+      message:
+        "A verificação automática será repetida após o intervalo de recuperação.",
+      last_error_code: "CONFIGURATION_INVALID",
+      consecutive_failures: 2,
+    },
+  });
+  const overview = page.getByRole("tabpanel", {
+    name: "Visão geral",
+    exact: true,
+  });
+  await expect(overview).toContainText("Aguardando nova tentativa automática");
+  await expect(overview).toContainText("Próxima tentativa");
+  await expect(overview).toContainText("CONFIGURATION_INVALID");
+  await expect(overview).toContainText("Tentativas sem sucesso: 2");
+  await expect(
+    overview.getByText("Publicação liberada", { exact: true }),
+  ).toHaveCount(0);
+  await tab(page, "Verificação");
+  const panel = page.getByRole("tabpanel", {
+    name: "Verificação",
+    exact: true,
+  });
+  await expect(panel).toContainText(
+    "A publicação aguarda a verificação automática.",
+  );
+  await expect(panel).toContainText("Token inválido ou sem permissão.");
+  await expect(panel).toContainText(
+    "Use esta ação para antecipar uma conferência.",
+  );
+  for (const width of [320, 375, 768, 1024, 1440]) {
+    await page.setViewportSize({ width, height: 960 });
+    expect(
+      await page.evaluate(
+        () => document.documentElement.scrollWidth <= innerWidth + 1,
+      ),
+    ).toBe(true);
+  }
+});
+
+test("conexão desativada apresenta renovação pausada sem promessa de retentativa", async ({
+  page,
+}) => {
+  await open(
+    page,
+    {
+      ...ready,
+      can_publish: false,
+      automatic_verification: {
+        ...automatic,
+        enabled: false,
+        state: "disabled",
+        next_attempt_at: null,
+        message:
+          "A verificação automática está pausada porque a conexão foi desativada.",
+      },
+    },
+    { ...connection, state: "disabled" },
+  );
+  const overview = page.getByRole("tabpanel", {
+    name: "Visão geral",
+    exact: true,
+  });
+  await expect(overview).toContainText("Verificação automática desativada");
+  await expect(overview).toContainText("Publicação bloqueada");
+  await expect(overview).not.toContainText("Próxima tentativa");
+  await expect(overview).not.toContainText("Próxima verificação");
 });
 
 test("motivo da verificação sobrevive às abas e ao cancelamento do fechamento", async ({

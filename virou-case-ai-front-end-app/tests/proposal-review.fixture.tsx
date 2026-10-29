@@ -1,6 +1,6 @@
 import { useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
-import { command } from "../src/shared/api";
+import { ApiError, command } from "../src/shared/api";
 import { ProposalReview } from "../src/features/ProposalReview";
 import type { Proposal, ReviewView } from "../src/features/proposalTypes";
 import "../src/shared/styles.css";
@@ -49,6 +49,17 @@ const proposal: Proposal = {
       message: "Execução do projeto gerado não realizada",
     },
   ],
+  migration_history: new URLSearchParams(location.search).has(
+    "migration-history",
+  )
+    ? {
+        format_version: 1,
+        policy_version: "migration-history-v1",
+        base_revision_id: "base-revision",
+        preserved: [{ path: "migrations/0001.sql", sha256: "a".repeat(64) }],
+        added: [{ path: "migrations/0002.sql", sha256: "b".repeat(64) }],
+      }
+    : undefined,
   warnings: [],
   conflict_paths: ["public/index.html"],
 };
@@ -72,7 +83,28 @@ function Fixture() {
           busy={busy}
           blocked={busy}
           dirty={false}
-          error={null}
+          error={
+            new URLSearchParams(location.search).has("migration-error")
+              ? new ApiError(
+                  "MIGRATION_HISTORY_IMMUTABLE",
+                  "Uma migration consolidada não pode ser alterada.",
+                  409,
+                  "",
+                  {
+                    migration_history: {
+                      format_version: 1,
+                      policy_version: "migration-history-v1",
+                      base_revision_id: "base-revision",
+                      operation: "apply",
+                      issue_count: 1,
+                      issues: [
+                        { path: "migrations/0001.sql", operation: "modify" },
+                      ],
+                    },
+                  },
+                )
+              : null
+          }
           memory={memory.current}
           onClose={() => setOpen(false)}
           onRefresh={async () => {

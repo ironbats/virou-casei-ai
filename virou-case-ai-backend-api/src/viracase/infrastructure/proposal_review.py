@@ -2,8 +2,14 @@ from hashlib import sha256
 
 from sqlalchemy import select
 
-from viracase.domain.rules import RuleError, canonical_hash
+from viracase.domain.migration_history import validate_migration_history
+from viracase.domain.rules import RuleError, canonical_hash, utcnow
 from viracase.infrastructure.models import Draft, Operation
+from viracase.infrastructure.publication_migration_context import (
+    migration_evidence_for_revision,
+    migration_validation_for_revision,
+    validate_revision_migrations,
+)
 
 
 class ProposalReviews:
@@ -109,6 +115,9 @@ class ProposalReviews:
             "applied" if applied else "discarded" if discarded else "conflict" if conflict else "generated"
         )
         structure_checked = operation.result.get("validation") == "structure_checked"
+        migrations = migration_evidence_for_revision(db, actor, candidate.id)
+        if not migrations:
+            migrations = {"migration_history": validate_migration_history(before, after, base_revision_id=base.id, operation="review")}
         return {
             "proposal_id": operation.id,
             "proposal_version": self.fingerprint(operation, base, candidate),
@@ -137,6 +146,7 @@ class ProposalReviews:
             "conflict_paths": paths if state == "conflict" else [],
             "applied_revision_id": applied,
             "discarded_at": discarded,
+            **migrations,
         }
 
     def get(self, actor, pid, oid):
@@ -186,4 +196,20 @@ class ProposalReviews:
                 + (" Arquivos: " + detail + "." if detail else " Compare a revisão atual."),
                 412,
             )
+        migrations = validate_revision_migrations(
+            self.repo, db, project, _after, base_revision_id=base.id,
+            revision_id=candidate.id, baseline_files=before, operation="apply",
+            previous_evidence=migration_validation_for_revision(db, actor, candidate.id),
+        )
+        stored = db.scalar(
+            select(Draft).where(
+                Draft.account_id == actor, Draft.kind == "migration_plan", Draft.target == candidate.id
+            )
+        )
+        if stored is None:
+            db.add(Draft(account_id=actor, kind="migration_plan", target=candidate.id, data=migrations))
+        elif stored.data != migrations:
+            stored.data = migrations
+            stored.version += 1
+            stored.updated_at = utcnow()
         return project, operation, candidate, draft

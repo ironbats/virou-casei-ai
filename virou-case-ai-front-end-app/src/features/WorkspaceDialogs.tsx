@@ -6,6 +6,12 @@ import type { useDraft } from "./useDraft";
 import { DraftConflict } from "./DraftConflict";
 import { ProposalReview } from "./ProposalReview";
 import type { ReviewSelection, ReviewView } from "./proposalTypes";
+import {
+  isMigrationPath,
+  migrationPathKey,
+  nextMigrationPath,
+  protectedMigration,
+} from "./migrationFiles";
 
 type Setter<T> = Dispatch<SetStateAction<T>>;
 type Review = ReviewSelection;
@@ -17,8 +23,8 @@ type Props = {
   setRemote: Setter<Remote>;
   exporting: boolean;
   setExporting: Setter<boolean>;
-  newFile: boolean;
-  setNewFile: Setter<boolean>;
+  newFile: false | "file" | "migration";
+  setNewFile: Setter<false | "file" | "migration">;
   editing: boolean;
   setEditing: Setter<boolean>;
   baseFiles: Record<string, string>;
@@ -212,19 +218,63 @@ export function WorkspaceDialogs({
         </Modal>
       )}
       {newFile && (
-        <Modal title="Novo arquivo" close={() => setNewFile(false)}>
+        <Modal
+          title={
+            newFile === "migration" ? "Criar nova migration" : "Novo arquivo"
+          }
+          close={() => setNewFile(false)}
+        >
+          {newFile === "migration" && (
+            <p>
+              Crie um arquivo SQL novo depois do último nome na ordem do
+              projeto. O rascunho pode ser ajustado até salvar; depois de
+              consolidado, caminho e conteúdo ficam protegidos.
+            </p>
+          )}
           <form
             className="form"
             onSubmit={(e) => {
               e.preventDefault();
               const path = String(new FormData(e.currentTarget).get("path"));
               if (
-                path in files ||
+                Object.keys(files).some(
+                  (entry) => migrationPathKey(entry) === migrationPathKey(path),
+                ) ||
+                protectedMigration(path, baseFiles) ||
                 Object.keys(files).length >= caps.limits.max_files
               ) {
                 setError(
                   new Error(
                     "Arquivo existente ou limite de arquivos atingido.",
+                  ),
+                );
+                return;
+              }
+              if (
+                newFile === "migration" &&
+                (!isMigrationPath(path) ||
+                  !path.startsWith("migrations/") ||
+                  !path.endsWith(".sql"))
+              ) {
+                setError(
+                  new Error(
+                    "Use um caminho em migrations/ com extensão .sql para a nova migration.",
+                  ),
+                );
+                return;
+              }
+              const lastMigration = Object.keys(baseFiles)
+                .filter(isMigrationPath)
+                .sort()
+                .at(-1);
+              if (
+                isMigrationPath(path) &&
+                lastMigration &&
+                path <= lastMigration
+              ) {
+                setError(
+                  new Error(
+                    `A nova migration precisa vir depois de ${lastMigration} na ordem dos arquivos. Os nomes históricos são preservados.`,
                   ),
                 );
                 return;
@@ -241,10 +291,22 @@ export function WorkspaceDialogs({
                 required
                 maxLength={caps.limits.max_path_length}
                 pattern="(?!/)(?!.*\.\.)(?!.*\\\\).+"
-                placeholder="public/novo-arquivo.js"
+                placeholder={
+                  newFile === "migration"
+                    ? "migrations/0002.sql"
+                    : "public/novo-arquivo.js"
+                }
+                defaultValue={
+                  newFile === "migration" ? nextMigrationPath(files) : ""
+                }
               />
             </label>
-            <button className="button primary">Adicionar arquivo</button>
+            <ErrorNotice error={error} />
+            <button className="button primary" disabled={blocked}>
+              {newFile === "migration"
+                ? "Criar rascunho de migration"
+                : "Adicionar arquivo"}
+            </button>
           </form>
         </Modal>
       )}

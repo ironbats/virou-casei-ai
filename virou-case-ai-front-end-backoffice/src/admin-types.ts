@@ -13,6 +13,23 @@ export type Account = {
   suspended: boolean;
 };
 export type Page<T> = { items: T[]; next_cursor?: string | null };
+export type PublicationMigrationDiagnostic = {
+  format_version: 1;
+  category: "migration";
+  code: string;
+  issues: {
+    code: string;
+    reason: string;
+    path?: string;
+    expected_sha256?: string;
+    actual_sha256?: string | null;
+    receipt_source: "inventory" | "remote" | "candidate";
+    message: string;
+    hint: string;
+  }[];
+  issue_count: number;
+  published_revision_id?: string;
+};
 export type Operation = {
   id: string;
   state: string;
@@ -20,6 +37,27 @@ export type Operation = {
   type: string;
   billing_status: string;
   model_label?: string;
+  progress_message?: string;
+  error_code?: string | null;
+  result_ref?: {
+    publication_failure?: {
+      code?: string;
+      message?: string;
+      stage?: string;
+      at?: string;
+      migration?: PublicationMigrationDiagnostic;
+    };
+    publication_recovery?: {
+      state: "scheduled" | "running" | "retry_wait" | "attention" | "resolved";
+      message: string;
+      attempts: number;
+      last_attempt_at: string | null;
+      last_checked_at: string | null;
+      next_attempt_at: string | null;
+      last_error_code: string | null;
+      resolution?: "pre_upload_failure" | "published" | "resume_safe";
+    };
+  };
   policy: Record<string, unknown>;
   attempt?: {
     state: string;

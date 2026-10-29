@@ -1,6 +1,11 @@
 import { expect, test, type Page } from "@playwright/test";
 import AxeBuilder from "@axe-core/playwright";
-import type { Operation } from "../src/shared/types";
+import type {
+  Operation,
+  PublicationMigrationDiagnostic,
+} from "../src/shared/types";
+import type { PublicationReadiness } from "../src/features/usePublication";
+import { editorAction } from "./workspaceHelper";
 
 const projectId = "project-publication-regression";
 const revisionId = "revision-saved-hono";
@@ -10,13 +15,73 @@ const pendingReason = {
   message:
     "A publicação aguarda a verificação operacional na conexão Cloudflare do backoffice.",
 };
+const automaticVerification: NonNullable<
+  PublicationReadiness["automatic_verification"]
+> = {
+  enabled: true,
+  state: "scheduled",
+  message:
+    "A conexão é verificada automaticamente antes do vencimento da validação.",
+  next_attempt_at: "2026-10-29T19:00:00Z",
+  last_attempt_at: "2026-10-29T10:00:00Z",
+  last_succeeded_at: "2026-10-29T10:01:00Z",
+  last_error_code: null,
+  consecutive_failures: 0,
+};
+const scheduledRecovery: NonNullable<
+  Operation["result_ref"]["publication_recovery"]
+> = {
+  state: "scheduled",
+  message: "A conferência automática desta publicação está programada.",
+  attempts: 1,
+  last_attempt_at: "2026-10-29T10:27:00Z",
+  last_checked_at: "2026-10-29T10:27:03Z",
+  next_attempt_at: "2026-10-29T10:28:03Z",
+  last_error_code: null,
+};
+const migrationDiagnostic: PublicationMigrationDiagnostic = {
+  format_version: 1,
+  category: "migration",
+  code: "MIGRATION_CHECKSUM_CONFLICT",
+  issue_count: 1,
+  published_revision_id: "published-original-revision",
+  issues: [
+    {
+      code: "MIGRATION_CHECKSUM_CONFLICT",
+      reason: "checksum_changed",
+      path: "migrations/0001.sql",
+      receipt_source: "remote",
+      expected_sha256: "a".repeat(64),
+      actual_sha256: "b".repeat(64),
+      message: "O arquivo difere do registro já aplicado ao banco.",
+      hint: "Restaure esta migration a partir da revisão publicada e salve as novas alterações em outro arquivo.",
+    },
+  ],
+};
+
+async function publicationAction(page: Page, name: string) {
+  const action = page.getByRole("button", { name, exact: true });
+  if (!(await action.isVisible()))
+    await page
+      .getByRole("button", { name: "Detalhes da publicação", exact: true })
+      .click();
+  await action.click();
+}
 
 async function publication(
   page: Page,
   editor = false,
   allowedActions = ["read", "write", "publish", "export"],
+  automatic: PublicationReadiness["automatic_verification"] = undefined,
+  sourceFiles: Record<string, string> = {
+    "public/index.html":
+      "<!doctype html><html><body><h1>Meu projeto</h1></body></html>",
+  },
 ) {
   const state = {
+    sourceFiles,
+    revisionWrites: [] as Record<string, string>[],
+    automaticVerification: automatic,
     reasons: [pendingReason],
     readinessFailures: 0,
     operationFailures: 0,
@@ -154,22 +219,64 @@ async function publication(
           origin: "manual",
           candidate: false,
           created_at: "2026-10-28T11:00:00Z",
-          files: [{ id: "index-file", path: "public/index.html", size: 80 }],
+          files: Object.entries(state.sourceFiles).map(
+            ([path, content], index) => ({
+              id: `file-${index}`,
+              path,
+              size: content.length,
+            }),
+          ),
         },
       });
     if (
-      path === `/projects/${projectId}/revisions/${revisionId}/files/index-file`
-    )
+      path.startsWith(`/projects/${projectId}/revisions/${revisionId}/files/`)
+    ) {
+      const index = Number(path.split("file-").at(-1));
+      const [filePath, content] = Object.entries(state.sourceFiles)[index];
+      return route.fulfill({ json: { path: filePath, content } });
+    }
+    if (
+      path === `/projects/${projectId}/revisions` &&
+      request.method() === "POST"
+    ) {
+      const files = request.postDataJSON().files as Record<string, string>;
+      state.revisionWrites.push(files);
+      state.sourceFiles = files;
       return route.fulfill({
         json: {
-          path: "public/index.html",
-          content:
-            "<!doctype html><html><body><h1>Meu projeto</h1></body></html>",
+          project: {
+            id: projectId,
+            name: "Projeto Hono verificado",
+            objective: "Publicar a revisão validada",
+            stack: "hono-typescript-d1",
+            version: 2,
+            current_revision_id: revisionId,
+            state: "active",
+            created_at: "2026-10-28T11:00:00Z",
+          },
+          revision: {
+            id: revisionId,
+            project_id: projectId,
+            origin: "manual",
+            candidate: false,
+            created_at: "2026-10-29T11:00:00Z",
+            files: [],
+          },
         },
       });
+    }
     if (path === "/operations" || path.startsWith("/operations/")) {
-      state.operationRequests.push(url.pathname + url.search);
-      if (state.operationFailures > 0) {
+      const kind = url.searchParams.get("kind");
+      const operation = state.operations.find(
+        (item) => item.id === path.split("/").at(-1),
+      );
+      const publicationRequest =
+        path === "/operations"
+          ? !kind || kind === "publication"
+          : operation?.type === "publication";
+      if (publicationRequest)
+        state.operationRequests.push(url.pathname + url.search);
+      if (publicationRequest && state.operationFailures > 0) {
         state.operationFailures--;
         return route.fulfill({
           status: 503,
@@ -183,9 +290,6 @@ async function publication(
         });
       }
       if (path.startsWith("/operations/")) {
-        const operation = state.operations.find(
-          (item) => item.id === path.split("/").at(-1),
-        );
         return operation
           ? route.fulfill({ json: operation })
           : route.fulfill({
@@ -200,10 +304,9 @@ async function publication(
       }
       return route.fulfill({
         json: {
-          items:
-            url.searchParams.get("kind") === "generation"
-              ? []
-              : state.operations,
+          items: kind
+            ? state.operations.filter((item) => item.type === kind)
+            : state.operations,
           next_cursor: null,
         },
       });
@@ -222,12 +325,15 @@ async function publication(
           },
         });
       }
-      const completed = state.operations.find((op) => op.state === "succeeded");
+      const completed = state.operations.find(
+        (op) => op.type === "publication" && op.state === "succeeded",
+      );
       return route.fulfill({
         json: {
           can_publish: state.reasons.length === 0,
           revision_id: revisionId,
           configuration_version: 3,
+          automatic_verification: state.automaticVerification,
           reasons: state.reasons,
           publication: completed
             ? {
@@ -313,9 +419,18 @@ async function publication(
     await expect(
       page.getByRole("heading", { name: "Publicação do projeto", exact: true }),
     ).toBeVisible();
-  await expect(page.locator("#publication-reason")).toHaveText(
-    pendingReason.message,
-  );
+  if (editor)
+    await page
+      .getByRole("button", { name: "Detalhes da publicação", exact: true })
+      .click();
+  if (editor && automatic)
+    await expect(page.locator("#publication-reason")).toContainText(
+      pendingReason.message,
+    );
+  else
+    await expect(page.locator("#publication-reason")).toHaveText(
+      pendingReason.message,
+    );
   return state;
 }
 
@@ -403,6 +518,38 @@ test("atualiza automaticamente a disponibilidade sem recarregar o projeto", asyn
   expect(state.readinessRequests.length).toBeGreaterThan(before);
   expect(state.submissions).toHaveLength(0);
 });
+
+for (const editor of [false, true]) {
+  test(`renovação da conexão libera ${editor ? "editor" : "publicação"} sem pedir verificação manual`, async ({
+    page,
+  }) => {
+    await page.clock.install();
+    const state = await publication(
+      page,
+      editor,
+      undefined,
+      automaticVerification,
+    );
+    const publish = page.getByRole("button", {
+      name: editor ? "Publicar" : "Publicar esta revisão",
+      exact: true,
+    });
+    await expect(publish).toBeDisabled();
+    await expect(
+      page.getByRole("button", { name: "Verificar novamente", exact: true }),
+    ).toHaveCount(0);
+    await expect(
+      page.getByText(automaticVerification.message, { exact: true }),
+    ).toBeVisible();
+    state.reasons = [];
+    await page.clock.fastForward(15000);
+    await expect(publish).toBeEnabled();
+    await expect(
+      page.getByText(automaticVerification.message, { exact: true }),
+    ).toHaveCount(0);
+    expect(state.submissions).toHaveLength(0);
+  });
+}
 
 test("mantém bloqueio quando a stack ou o acesso não estão autorizados", async ({
   page,
@@ -552,9 +699,7 @@ test("editor abre a tela com dois cliques para publicar e preserva o pedido aind
   await expect(page.getByLabel("O que vamos fazer?")).toHaveValue(
     "Meu próximo pedido precisa continuar salvo",
   );
-  await page
-    .getByRole("button", { name: "Acompanhar publicação", exact: true })
-    .click();
+  await publicationAction(page, "Acompanhar publicação");
   await expect(page.locator(".publication-summary")).toHaveAttribute(
     "data-state",
     "queued",
@@ -596,7 +741,7 @@ test("rascunho de código bloqueia envio e pode acompanhar sem perder alteraçõ
   await page
     .getByRole("button", { name: "Verificar novamente", exact: true })
     .click();
-  await page.getByRole("button", { name: "Usar texto simples" }).click();
+  await editorAction(page, "Usar texto simples");
   const content =
     "<!doctype html><html><body><h1>Minha alteração preservada</h1></body></html>";
   await page.locator(".code-editor").fill(content);
@@ -606,15 +751,13 @@ test("rascunho de código bloqueia envio e pode acompanhar sem perder alteraçõ
   await expect(page.locator("#publication-reason")).toContainText(
     "Salve as alterações",
   );
-  await page
-    .getByRole("button", { name: "Ver detalhes da publicação", exact: true })
-    .click();
+  await publicationAction(page, "Ver detalhes da publicação");
   expect(state.draft.files?.["public/index.html"]).toBe(content);
   expect(state.submissions).toHaveLength(0);
   await page
     .getByRole("link", { name: "Voltar ao projeto", exact: true })
     .click();
-  await page.getByRole("button", { name: "Usar texto simples" }).click();
+  await editorAction(page, "Usar texto simples");
   await expect(page.locator(".code-editor")).toHaveValue(
     /Minha alteração preservada/,
   );
@@ -682,6 +825,439 @@ test("resultado em conferência bloqueia reenvio mesmo com disponibilidade desat
     page.getByRole("button", { name: "Publicar esta revisão" }),
   ).toBeDisabled();
   expect(state.submissions).toHaveLength(1);
+});
+
+test("conferência automática encerra falha anterior ao upload na operação retomada sem repetir o envio", async ({
+  page,
+}, info) => {
+  await page.clock.install();
+  const state = await publication(page);
+  await startPublication(page, state);
+  const operationId = state.operations[0].id;
+  setStage(state, "publication_building");
+  setStage(state, "publication_provisioning");
+  setStage(state, "publication_uploading");
+  setStage(state, "publication_reconciling", "reconciling");
+  state.operations[0].result_ref = {
+    revision_id: revisionId,
+    publication_recovery: scheduledRecovery,
+  };
+  state.automaticVerification = automaticVerification;
+  await page.clock.fastForward(1500);
+  await expect(page.locator(".publication-summary")).toContainText(
+    scheduledRecovery.message,
+  );
+  await expect(page.locator(".publication-summary")).toContainText(
+    "Próxima conferência automática",
+  );
+  await expect(
+    page.getByRole("button", { name: "Verificar novamente", exact: true }),
+  ).toHaveCount(0);
+  await expect(
+    page.getByText(automaticVerification.message, { exact: true }),
+  ).toHaveCount(0);
+  await expect(
+    page.getByRole("button", { name: "Publicar esta revisão", exact: true }),
+  ).toBeDisabled();
+  setStage(state, "queued", "queued");
+  setStage(state, "publication_building");
+  setStage(state, "publication_provisioning");
+  setStage(state, "publication_failed", "failed");
+  state.operations[0].error_code = "MIGRATION_CHECKSUM_CONFLICT";
+  state.operations[0].result_ref = {
+    revision_id: revisionId,
+    publication_failure: {
+      code: "MIGRATION_CHECKSUM_CONFLICT",
+      message:
+        "Uma migration já aplicada foi alterada. Restaure o arquivo original e crie uma nova migration para a alteração.",
+      stage: "publication_provisioning",
+      at: "2026-10-29T10:28:04Z",
+    },
+    publication_recovery: {
+      ...scheduledRecovery,
+      state: "resolved",
+      message: "A tentativa foi encerrada antes do envio à hospedagem.",
+      resolution: "pre_upload_failure",
+      next_attempt_at: null,
+      last_checked_at: "2026-10-29T10:28:04Z",
+    },
+  };
+  state.reasons = [];
+  await page.clock.fastForward(1500);
+  await expect(
+    page.getByRole("heading", {
+      name: "Publicação não concluída",
+      exact: true,
+    }),
+  ).toBeVisible();
+  await expect(page.locator(".publication-summary")).toContainText(
+    "Uma migration já aplicada foi alterada.",
+  );
+  await expect(page.locator(".publication-summary")).toContainText(
+    "antes do envio à hospedagem",
+  );
+  await expect(
+    page.locator(".publication-steps [aria-current=step]"),
+  ).toContainText("Preparar recursos");
+  await expect(
+    page
+      .locator(".publication-steps li")
+      .filter({ hasText: "Enviar à hospedagem" }),
+  ).toContainText("Não iniciada");
+  await expect(
+    page.getByRole("button", { name: "Publicar esta revisão", exact: true }),
+  ).toBeEnabled();
+  await expect(page).toHaveURL(new RegExp(`operation=${operationId}$`));
+  await expect(
+    page.getByRole("link", { name: "Abrir publicação" }),
+  ).toHaveCount(0);
+  expect(state.submissions).toHaveLength(1);
+  await page.screenshot({
+    path: info.outputPath("publication-pre-upload-failure.png"),
+    fullPage: true,
+  });
+});
+
+test("recuperação que exige revisão mantém resultado pendente sem prometer progresso ou permitir reenvio", async ({
+  page,
+}, info) => {
+  await page.clock.install();
+  const state = await publication(page);
+  await startPublication(page, state);
+  setStage(state, "publication_migrating");
+  setStage(state, "publication_reconciling", "reconciling");
+  state.operations[0].result_ref = {
+    publication_recovery: {
+      ...scheduledRecovery,
+      state: "attention",
+      message:
+        "O resultado das migrations precisa de revisão antes de continuar.",
+      attempts: 5,
+      last_error_code: "MIGRATION_HISTORY_UNCERTAIN",
+      next_attempt_at: null,
+    },
+  };
+  state.reasons = [];
+  await page.clock.fastForward(1500);
+  await expect(
+    page.getByRole("heading", {
+      name: "Uma pendência impede a nova publicação",
+      exact: true,
+    }),
+  ).toBeVisible();
+  await expect(
+    page.locator(".publication-steps [aria-current=step]"),
+  ).toContainText("Confirmação necessária");
+  await expect(
+    page.locator(".publication-steps [aria-current=step]"),
+  ).toHaveAttribute("data-state", "interrupted");
+  await expect(page.locator(".publication-summary")).not.toContainText(
+    "A publicação continua",
+  );
+  await expect(page.locator(".publication-summary")).not.toContainText(
+    "Próxima conferência automática",
+  );
+  const submit = page.getByRole("button", {
+    name: "Publicar esta revisão",
+    exact: true,
+  });
+  await expect(submit).toBeDisabled();
+  const requests = state.operationRequests.length;
+  await page.clock.fastForward(15000);
+  await expect
+    .poll(() => state.operationRequests.length)
+    .toBeGreaterThan(requests);
+  await expect(submit).toBeDisabled();
+  expect(state.submissions).toHaveLength(1);
+  await page.setViewportSize({ width: 375, height: 960 });
+  expect(
+    await page.evaluate(
+      () => document.documentElement.scrollWidth <= innerWidth + 1,
+    ),
+  ).toBe(true);
+  await page.screenshot({
+    path: info.outputPath("publication-needs-review-mobile.png"),
+    fullPage: true,
+  });
+  await page
+    .getByRole("link", { name: "Voltar ao projeto", exact: true })
+    .click();
+  await expect(page.locator("#publication-reason")).toContainText(
+    "O resultado das migrations precisa de revisão antes de continuar.",
+  );
+  await expect(
+    page.getByRole("button", { name: "Publicar", exact: true }),
+  ).toBeDisabled();
+  expect(state.submissions).toHaveLength(1);
+});
+
+test("recuperação retoma a mesma operação e só mostra o link após sucesso comprovado", async ({
+  page,
+}) => {
+  await page.clock.install();
+  const state = await publication(page);
+  await startPublication(page, state);
+  const operationId = state.operations[0].id;
+  setStage(state, "publication_verifying");
+  setStage(state, "publication_reconciling", "reconciling");
+  state.operations[0].result_ref = {
+    url: publicationUrl,
+    publication_recovery: { ...scheduledRecovery, state: "retry_wait" },
+  };
+  state.reasons = [];
+  await page.clock.fastForward(1500);
+  await expect(page.locator(".publication-summary")).toContainText(
+    scheduledRecovery.message,
+  );
+  await expect(
+    page.getByRole("link", { name: "Abrir publicação" }),
+  ).toHaveCount(0);
+  await expect(
+    page.getByRole("button", { name: "Publicar esta revisão" }),
+  ).toBeDisabled();
+  setStage(state, "queued", "queued");
+  state.operations[0].result_ref.publication_recovery = {
+    ...scheduledRecovery,
+    state: "resolved",
+    message: "A mesma operação foi retomada após conferência.",
+    resolution: "resume_safe",
+    next_attempt_at: null,
+  };
+  await page.clock.fastForward(1500);
+  await expect(
+    page.getByRole("heading", { name: "Publicação na fila" }),
+  ).toBeVisible();
+  await expect(page).toHaveURL(new RegExp(`operation=${operationId}$`));
+  setStage(state, "publication_verified", "succeeded");
+  state.operations[0].result_ref = {
+    url: publicationUrl,
+    revision_id: revisionId,
+    verified_at: "2026-10-29T10:30:00Z",
+    publication_recovery: {
+      ...scheduledRecovery,
+      state: "resolved",
+      message: "Publicação confirmada pela conferência remota.",
+      resolution: "published",
+      next_attempt_at: null,
+    },
+  };
+  await page.clock.fastForward(1500);
+  await expect(
+    page.getByRole("heading", { name: "Publicação concluída" }),
+  ).toBeVisible();
+  await expect(
+    page.getByRole("link", { name: "Abrir publicação" }),
+  ).toHaveAttribute("href", publicationUrl + "/");
+  expect(state.operations[0].id).toBe(operationId);
+  expect(state.submissions).toHaveLength(1);
+});
+
+test("diagnóstico das migrations mostra arquivo e orientação e reutiliza análise com contexto da publicação", async ({
+  page,
+  context,
+}, info) => {
+  await context.grantPermissions(["clipboard-read", "clipboard-write"]);
+  const state = await publication(page);
+  await startPublication(page, state);
+  const failedOperationId = state.operations[0].id;
+  setStage(state, "publication_provisioning");
+  setStage(state, "publication_failed", "failed");
+  state.operations[0].error_code = "MIGRATION_CHECKSUM_CONFLICT";
+  state.operations[0].result_ref = {
+    revision_id: revisionId,
+    publication_failure: {
+      code: "MIGRATION_CHECKSUM_CONFLICT",
+      message: "Uma migration já aplicada foi alterada.",
+      stage: "publication_provisioning",
+      migration: structuredClone(migrationDiagnostic),
+    },
+  };
+  state.reasons = [];
+  const analysisRequests: unknown[] = [];
+  await page.route(
+    `**/api/v1/projects/${projectId}/code-analyses`,
+    async (route) => {
+      analysisRequests.push(route.request().postDataJSON());
+      const analysis: Operation = {
+        ...state.operations[0],
+        id: "migration-analysis",
+        type: "code_analysis",
+        state: "succeeded",
+        progress_stage: "code_analysis_completed",
+        error_code: null,
+        result_ref: {
+          kind: "code_analysis",
+          revision_id: revisionId,
+          publication_operation_id: failedOperationId,
+          summary:
+            "Confira a migration original na revisão publicada antes de preparar a correção.",
+          issues: [],
+          can_request_correction: false,
+        },
+      };
+      state.operations.push(analysis);
+      await route.fulfill({ status: 202, json: analysis });
+    },
+  );
+  await page
+    .getByRole("button", { name: "Atualizar status", exact: true })
+    .click();
+  const diagnostic = page.getByRole("region", {
+    name: "Diagnóstico das migrations",
+    exact: true,
+  });
+  await expect(diagnostic).toContainText("migrations/0001.sql");
+  await expect(diagnostic).toContainText(migrationDiagnostic.issues[0].message);
+  await expect(diagnostic).toContainText(migrationDiagnostic.issues[0].hint);
+  await expect(diagnostic).toContainText("published-original-revision");
+  await expect(
+    diagnostic.getByText("SHA-256 registrado:", { exact: false }),
+  ).toBeHidden();
+  expect(analysisRequests).toHaveLength(0);
+  await diagnostic
+    .getByRole("button", { name: "Copiar diagnóstico", exact: true })
+    .click();
+  const copied = await page.evaluate(() => navigator.clipboard.readText());
+  expect(copied).toContain("migrations/0001.sql");
+  expect(copied).toContain(migrationDiagnostic.issues[0].hint);
+  expect(copied).toContain(failedOperationId);
+  const analysisPanel = page.getByRole("region", {
+    name: "Análise IA da publicação",
+    exact: true,
+  });
+  await analysisPanel
+    .getByRole("button", { name: "Pedir Análise IA", exact: true })
+    .click();
+  await expect(analysisPanel).toContainText(
+    "Confira a migration original na revisão publicada",
+  );
+  expect(analysisRequests).toEqual([
+    {
+      revision_id: revisionId,
+      source: "publication",
+      publication_operation_id: failedOperationId,
+      policy_version: "test",
+    },
+  ]);
+  await expect(
+    analysisPanel.getByRole("button", { name: "Solicitar correção IA" }),
+  ).toHaveCount(0);
+  await diagnostic
+    .getByText("Informações da conferência", { exact: true })
+    .click();
+  await expect(diagnostic).toContainText(
+    `SHA-256 registrado: ${"a".repeat(64)}`,
+  );
+  for (const width of [320, 375, 768, 1024, 1440]) {
+    await page.setViewportSize({ width, height: 1000 });
+    await page.evaluate(() => {
+      if (document.activeElement instanceof HTMLElement)
+        document.activeElement.blur();
+      window.scrollTo({ top: 0, behavior: "instant" });
+    });
+    expect(
+      await page.evaluate(
+        () => document.documentElement.scrollWidth <= innerWidth + 1,
+      ),
+    ).toBe(true);
+    expect(
+      await diagnostic.evaluate(
+        (element) => element.scrollWidth <= element.clientWidth + 1,
+      ),
+    ).toBe(true);
+    if ([375, 1440].includes(width))
+      await page.screenshot({
+        path: info.outputPath(`migration-diagnostic-${width}.png`),
+        fullPage: true,
+      });
+  }
+  expect(
+    (
+      await new AxeBuilder({ page })
+        .include(".publication-build-diagnostics")
+        .withTags(["wcag2a", "wcag2aa"])
+        .analyze()
+    ).violations,
+  ).toEqual([]);
+  expect(state.submissions).toHaveLength(1);
+  expect(state.draftWrites).toHaveLength(0);
+});
+
+test("conflito nos recibos mostra orientação sem oferecer correção automática do banco", async ({
+  page,
+}) => {
+  const state = await publication(page);
+  await startPublication(page, state);
+  setStage(state, "publication_migrating");
+  setStage(state, "publication_reconciling", "reconciling");
+  state.operations[0].error_code = "MIGRATION_HISTORY_UNCERTAIN";
+  state.operations[0].result_ref = {
+    revision_id: "revision-before-current",
+    publication_recovery: {
+      ...scheduledRecovery,
+      state: "attention",
+      message: "Os registros das migrations precisam de revisão.",
+      next_attempt_at: null,
+    },
+    publication_failure: {
+      code: "MIGRATION_HISTORY_UNCERTAIN",
+      stage: "publication_migrating",
+      migration: {
+        ...migrationDiagnostic,
+        code: "MIGRATION_HISTORY_UNCERTAIN",
+        issue_count: 13,
+        issues: [
+          {
+            ...migrationDiagnostic.issues[0],
+            code: "MIGRATION_HISTORY_UNCERTAIN",
+            reason: "receipt_conflict",
+            message: "Os registros da publicação e do banco são diferentes.",
+            hint: "Confira os recibos antes de continuar. Alterar o SQL não confirma o resultado anterior.",
+          },
+        ],
+      },
+    },
+  };
+  state.reasons = [];
+  await page
+    .getByRole("button", { name: "Atualizar status", exact: true })
+    .click();
+  const diagnostic = page.getByRole("region", {
+    name: "Diagnóstico das migrations",
+    exact: true,
+  });
+  await expect(diagnostic).toContainText(
+    "Os registros da publicação e do banco são diferentes.",
+  );
+  await expect(diagnostic).toContainText(
+    "Alterar o SQL não confirma o resultado anterior.",
+  );
+  await expect(diagnostic).toContainText(
+    "Este diagnóstico pertence a uma revisão anterior.",
+  );
+  await expect(diagnostic).toContainText("Exibindo 1 de 13 problemas.");
+  await diagnostic
+    .getByText("Informações da conferência", { exact: true })
+    .click();
+  await expect(diagnostic).toContainText(
+    `SHA-256 do recibo remoto: ${"b".repeat(64)}`,
+  );
+  await expect(diagnostic).not.toContainText("SHA-256 da revisão:");
+  const analysisPanel = page.getByRole("region", {
+    name: "Análise IA da publicação",
+    exact: true,
+  });
+  await expect(
+    analysisPanel.getByRole("button", { name: "Pedir Análise IA" }),
+  ).toBeEnabled();
+  await expect(
+    analysisPanel.getByRole("button", { name: "Solicitar correção IA" }),
+  ).toHaveCount(0);
+  await expect(
+    page.getByRole("button", { name: "Publicar esta revisão", exact: true }),
+  ).toBeDisabled();
+  expect(state.submissions).toHaveLength(1);
+  expect(state.draftWrites).toHaveLength(0);
 });
 
 test("envio recusado mantém confirmação e a repetição usa a mesma chave idempotente", async ({
@@ -860,9 +1436,9 @@ test("tela de publicação acessível por teclado e responsiva sem overflow", as
   const state = await publication(page);
   await page.setViewportSize({ width: 375, height: 900 });
   expect(
-    (await page.locator(".publication-confirmation").boundingBox())!.y,
-  ).toBeLessThan(
     (await page.locator(".publication-progress").boundingBox())!.y,
+  ).toBeLessThan(
+    (await page.locator(".publication-confirmation").boundingBox())!.y,
   );
   await expect(page.locator(".publication-retention")).toContainText(
     "Consulte Uso e acesso para conferir o prazo de download.",
@@ -995,9 +1571,7 @@ test("sair durante o envio mantém o destino escolhido e a operação segue recu
     page.getByRole("tree", { name: "Arquivos do projeto" }),
   ).toBeVisible();
   await expect(page).toHaveURL(`/app/projetos/${projectId}`);
-  await page
-    .getByRole("button", { name: "Acompanhar publicação", exact: true })
-    .click();
+  await publicationAction(page, "Acompanhar publicação");
   await expect(page.locator(".publication-summary")).toHaveAttribute(
     "data-state",
     "queued",
@@ -1220,4 +1794,354 @@ test("diagnóstico de build mantém detalhes e ações acessíveis em telas pequ
       () => document.documentElement.scrollWidth <= innerWidth,
     ),
   ).toBe(true);
+});
+
+test("recusa D1 preserva erro inicial, impedimento atual e evidência pendente sem cobrar análise", async ({
+  page,
+}, info) => {
+  await page.clock.install();
+  const state = await publication(page);
+  await startPublication(page, state);
+  setStage(state, "publication_migrating");
+  setStage(state, "publication_reconciling", "reconciling");
+  state.operations[0].error_code = "PUBLICATION_REJECTED";
+  state.operations[0].result_ref = {
+    revision_id: revisionId,
+    publication_diagnostic: {
+      version: 1,
+      phase: "sql_sending",
+      migration: {
+        name: "migrations/0002_add_salt.sql",
+        sha256: "a".repeat(64),
+      },
+      effect_status: "unknown",
+      initial_error: {
+        code: "PUBLICATION_REJECTED",
+        message:
+          "O banco recusou a solicitação sem confirmar todos os efeitos.",
+        provider: {
+          method: "POST",
+          route: "/accounts/:account/d1/database/:database/query",
+          status: 400,
+          provider_error_codes: [7500],
+          cf_ray: "test-ray",
+          message: "O comando SQL foi recusado.",
+          statement_index: 2,
+        },
+      },
+    },
+    publication_recovery: {
+      ...scheduledRecovery,
+      version: 2,
+      state: "attention",
+      message: "A recuperação automática foi interrompida.",
+      last_error_code: "MIGRATION_RESULT_UNKNOWN",
+      last_error_message: "O recibo remoto desta migration não foi encontrado.",
+      required_action:
+        "Conferir o recibo e o schema desta migration no banco antes de continuar.",
+      owner: "operator",
+      missing_evidence: ["Recibo correspondente ao nome e SHA-256 esperados."],
+      next_attempt_at: null,
+    },
+  };
+  state.reasons = [];
+  await page.clock.fastForward(1500);
+  await expect(
+    page.getByRole("heading", {
+      name: "Uma pendência impede a nova publicação",
+      exact: true,
+    }),
+  ).toBeVisible();
+  const diagnostic = page.getByRole("region", {
+    name: "Diagnóstico da tentativa",
+  });
+  await expect(diagnostic).toContainText("PUBLICATION_REJECTED");
+  await expect(diagnostic.locator(".publication-next-step")).toHaveCSS(
+    "display",
+    "block",
+  );
+  await expect(diagnostic).toContainText("MIGRATION_RESULT_UNKNOWN");
+  await expect(diagnostic).toContainText("migrations/0002_add_salt.sql");
+  await expect(diagnostic).toContainText(
+    "Responsável pela operação da plataforma",
+  );
+  await expect(diagnostic).toContainText(
+    "Recibo correspondente ao nome e SHA-256 esperados.",
+  );
+  await expect(page.locator(".publication-summary")).toContainText(
+    "Acompanhamento do status ativo · consulte as evidências para continuar",
+  );
+  await expect(page.locator("#publication-reason")).toContainText(
+    "duplicar efeitos no banco",
+  );
+  await expect(
+    page
+      .locator(".publication-steps li")
+      .filter({ hasText: "Enviar à hospedagem" }),
+  ).toContainText("Não iniciada");
+  await expect(
+    page.getByRole("button", { name: "Publicar esta revisão", exact: true }),
+  ).toBeDisabled();
+  await expect(
+    page.getByRole("button", { name: "Pedir Análise IA", exact: true }),
+  ).toBeEnabled();
+  await page
+    .getByRole("button", { name: "Atualizar status", exact: true })
+    .click();
+  expect(state.submissions).toHaveLength(1);
+  expect(state.draftWrites).toHaveLength(0);
+  await page.reload();
+  await expect(diagnostic).toContainText("MIGRATION_RESULT_UNKNOWN");
+  for (const width of [320, 375, 768, 1024, 1440]) {
+    await page.setViewportSize({ width, height: 1000 });
+    expect(
+      await page.evaluate(
+        () => document.documentElement.scrollWidth <= innerWidth,
+      ),
+    ).toBe(true);
+  }
+  await page.screenshot({
+    path: info.outputPath("migration-result-unknown.png"),
+    fullPage: true,
+  });
+  expect(
+    (
+      await new AxeBuilder({ page })
+        .include(".publication-page")
+        .withTags(["wcag2a", "wcag2aa"])
+        .analyze()
+    ).violations,
+  ).toEqual([]);
+});
+
+test("recusa comprovada termina a operação e libera nova publicação via polling", async ({
+  page,
+}) => {
+  await page.clock.install();
+  const state = await publication(page);
+  await startPublication(page, state);
+  setStage(state, "publication_migrating");
+  setStage(state, "publication_reconciling", "reconciling");
+  state.operations[0].error_code = "PUBLICATION_REJECTED";
+  state.operations[0].result_ref = {
+    publication_recovery: {
+      ...scheduledRecovery,
+      state: "attention",
+      last_error_code: "MIGRATION_RESULT_UNKNOWN",
+    },
+  };
+  await page.clock.fastForward(1500);
+  setStage(state, "publication_failed", "failed");
+  state.operations[0].error_code = "MIGRATION_SQL_REJECTED";
+  state.operations[0].result_ref = {
+    revision_id: revisionId,
+    publication_failure: {
+      code: "MIGRATION_SQL_REJECTED",
+      stage: "publication_migrating",
+      message:
+        "O banco recusou esta migration; a ausência de efeitos foi confirmada.",
+    },
+    publication_diagnostic: {
+      version: 1,
+      phase: "sql_rejected",
+      effect_status: "none",
+      migration: { name: "migrations/0002.sql", sha256: "a".repeat(64) },
+      initial_error: {
+        code: "MIGRATION_SQL_REJECTED",
+        message:
+          "O banco recusou esta migration; a ausência de efeitos foi confirmada.",
+      },
+    },
+    publication_recovery: {
+      ...scheduledRecovery,
+      state: "resolved",
+      resolution: "migration_rejected",
+      next_attempt_at: null,
+    },
+  };
+  state.reasons = [];
+  await page.clock.fastForward(15000);
+  await expect(
+    page.getByRole("heading", {
+      name: "Migration recusada pelo banco",
+      exact: true,
+    }),
+  ).toBeVisible();
+  const publish = page.getByRole("button", {
+    name: "Publicar esta revisão",
+    exact: true,
+  });
+  await expect(publish).toBeEnabled();
+  await publish.evaluate((button: HTMLButtonElement) => {
+    button.click();
+    button.click();
+  });
+  await expect(page.locator(".publication-summary")).toHaveAttribute(
+    "data-state",
+    "queued",
+  );
+  expect(state.submissions).toHaveLength(2);
+});
+
+test("SQL confirmado e recibo ausente possuem diagnóstico distinto sem reenviar SQL", async ({
+  page,
+}) => {
+  const state = await publication(page);
+  await startPublication(page, state);
+  setStage(state, "publication_migrating");
+  setStage(state, "publication_reconciling", "reconciling");
+  state.operations[0].error_code = "PUBLICATION_REJECTED";
+  state.operations[0].result_ref = {
+    publication_diagnostic: {
+      version: 1,
+      phase: "receipt_sending",
+      effect_status: "confirmed",
+      migration: { name: "migrations/0002.sql" },
+      initial_error: {
+        code: "PUBLICATION_REJECTED",
+        message: "Falha ao confirmar o recibo após execução do SQL.",
+      },
+    },
+    publication_recovery: {
+      ...scheduledRecovery,
+      state: "attention",
+      last_error_code: "MIGRATION_RESULT_UNKNOWN",
+      next_attempt_at: null,
+    },
+  };
+  await page
+    .getByRole("button", { name: "Atualizar status", exact: true })
+    .click();
+  await expect(
+    page.getByRole("heading", {
+      name: "Uma pendência impede a nova publicação",
+      exact: true,
+    }),
+  ).toBeVisible();
+  await expect(
+    page.getByRole("region", { name: "Diagnóstico da tentativa" }),
+  ).toContainText(
+    "Execução do SQL confirmada; recibo verificado separadamente",
+  );
+  await expect(
+    page.getByRole("button", { name: "Publicar esta revisão", exact: true }),
+  ).toBeDisabled();
+  expect(state.submissions).toHaveLength(1);
+});
+
+test("operação antiga informa diagnóstico ausente e mantém o último link durante falha de consulta", async ({
+  page,
+}) => {
+  const state = await publication(page);
+  await startPublication(page, state);
+  setStage(state, "publication_reconciling", "reconciling");
+  state.operations[0].error_code = "PUBLICATION_REJECTED";
+  state.operations[0].result_ref = {
+    revision_id: revisionId,
+    publication_diagnostic: {
+      version: 1,
+      detail_available: false,
+      phase: "unknown",
+      initial_error: {
+        code: "PUBLICATION_REJECTED",
+        message: "Recusa antiga sem detalhe remoto armazenado.",
+      },
+    },
+    publication_recovery: {
+      ...scheduledRecovery,
+      state: "attention",
+      last_error_code: "MIGRATION_RESULT_UNKNOWN",
+      next_attempt_at: null,
+    },
+  };
+  state.operations.push({
+    ...state.operations[0],
+    id: "older-verified-publication",
+    state: "succeeded",
+    result_ref: {
+      url: publicationUrl,
+      revision_id: "previous-verified-revision",
+      verified_at: "2026-10-28T10:00:00Z",
+    },
+  });
+  await page
+    .getByRole("button", { name: "Atualizar status", exact: true })
+    .click();
+  const diagnostic = page.getByRole("region", {
+    name: "Diagnóstico da tentativa",
+  });
+  await expect(diagnostic).toContainText(
+    "Diagnóstico detalhado indisponível nesta tentativa.",
+  );
+  await expect(diagnostic).not.toContainText("permissões");
+  const link = page.getByRole("link", {
+    name: "Abrir publicação",
+    exact: true,
+  });
+  await expect(link).toHaveAttribute("href", publicationUrl + "/");
+  await expect(page.locator(".publication-link")).toContainText(
+    "Ele não confirma o resultado da tentativa",
+  );
+  state.readinessFailures = 1;
+  await page
+    .getByRole("button", { name: "Atualizar status", exact: true })
+    .click();
+  await expect(page.getByRole("alert")).toBeVisible();
+  await expect(link).toHaveAttribute("href", publicationUrl + "/");
+  await expect(
+    page.getByRole("button", { name: "Publicar esta revisão", exact: true }),
+  ).toBeDisabled();
+  expect(state.submissions).toHaveLength(1);
+});
+
+test("IDE protege migration salva e mantém novo rascunho editável até consolidar", async ({
+  page,
+}) => {
+  const source = "CREATE TABLE users (id INTEGER PRIMARY KEY);\r\n";
+  const state = await publication(page, true, undefined, undefined, {
+    "migrations/0001.sql": source,
+    "public/index.html": "<h1>Projeto</h1>",
+  });
+  await page.getByRole("treeitem", { name: /0001.sql/ }).click();
+  await editorAction(page, "Usar texto simples");
+  const editor = page.locator(".code-editor");
+  await expect(editor).toHaveAttribute("readonly", "");
+  await expect(
+    page.getByRole("button", { name: "Remover arquivo selecionado" }),
+  ).toBeDisabled();
+  await expect(page.locator(".workspace-migration-notice")).toContainText(
+    "Migration consolidada · somente leitura",
+  );
+  await page
+    .locator(".workspace-migration-notice")
+    .getByRole("button", { name: "Criar nova migration", exact: true })
+    .click();
+  const dialog = page.getByRole("dialog", {
+    name: "Criar nova migration",
+    exact: true,
+  });
+  await expect(dialog.getByLabel("Caminho relativo")).toHaveValue(
+    "migrations/0002.sql",
+  );
+  await dialog
+    .getByRole("button", { name: "Criar rascunho de migration" })
+    .click();
+  await expect(editor).not.toHaveAttribute("readonly", "");
+  const increment = "ALTER TABLE users ADD COLUMN enabled INTEGER DEFAULT 1;\n";
+  await editor.fill(increment);
+  await expect(
+    page.getByRole("button", { name: "Remover arquivo selecionado" }),
+  ).toBeEnabled();
+  await page
+    .getByRole("button", { name: "Salvar revisão", exact: true })
+    .click();
+  await expect(editor).toHaveAttribute("readonly", "");
+  expect(state.revisionWrites).toHaveLength(1);
+  expect(state.revisionWrites[0]["migrations/0001.sql"]).toBe(source);
+  expect(state.revisionWrites[0]["migrations/0002.sql"]).toBe(increment);
+  expect(state.submissions).toHaveLength(0);
+  await page.reload();
+  await page.getByRole("treeitem", { name: /0002.sql/ }).click();
+  await editorAction(page, "Usar texto simples");
+  await expect(editor).toHaveAttribute("readonly", "");
 });

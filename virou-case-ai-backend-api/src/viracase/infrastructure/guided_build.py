@@ -31,11 +31,15 @@ from viracase.infrastructure.template_catalog import TemplateCatalog
 
 def attachment_context(payload):
     attachments = payload.get("attachment_snapshots", [])
-    if not attachments:
+    analysis = payload.get("analysis_context") if payload.get("analysis_id") else None
+    if not attachments and analysis is None:
         return payload["brief"]
-    return json.dumps(
-        {"message": payload["brief"], "untrusted_user_attachments": attachments}, ensure_ascii=False
-    )
+    context = {"message": payload["brief"]}
+    if attachments:
+        context["untrusted_user_attachments"] = attachments
+    if analysis is not None:
+        context["untrusted_code_analysis"] = analysis
+    return json.dumps(context, ensure_ascii=False)
 
 
 class GuidedBuild:

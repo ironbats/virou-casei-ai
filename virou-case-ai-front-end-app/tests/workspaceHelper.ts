@@ -1,6 +1,39 @@
 import { expect, type BrowserContext, type Page } from "@playwright/test";
 
 let sessionCookies: Awaited<ReturnType<BrowserContext["cookies"]>> | undefined;
+
+export async function editorAction(page: Page, name: string) {
+  const action = page.getByRole("button", { name, exact: true });
+  if (!(await action.isVisible()))
+    await page
+      .getByRole("button", { name: "Opções do editor", exact: true })
+      .click();
+  await action.click();
+}
+
+export async function showConversation(page: Page) {
+  const narrow = (page.viewportSize()?.width ?? 1280) < 1180;
+  await expect
+    .poll(() =>
+      page
+        .locator(".ide-layout")
+        .evaluate((node) => node.classList.contains("is-narrow")),
+    )
+    .toBe(narrow);
+  if (narrow)
+    await page
+      .getByRole("tablist", { name: "Área do projeto" })
+      .getByRole("tab", { name: "Chat", exact: true })
+      .click();
+}
+
+export async function projectAction(page: Page, name: string) {
+  await page
+    .getByRole("button", { name: "Mais ações do projeto", exact: true })
+    .click();
+  await page.getByRole("link", { name, exact: true }).click();
+}
+
 export async function workspace(page: Page, guided = false) {
   if (sessionCookies) {
     await page.context().addCookies(sessionCookies);
@@ -20,8 +53,10 @@ export async function workspace(page: Page, guided = false) {
   const project = await page.evaluate(async () => {
     const me = await (await fetch("/api/v1/me")).json();
     const existing = await (await fetch("/api/v1/projects")).json();
-    if (existing.items.length) {
-      const project = existing.items[0];
+    const project = existing.items.find(
+      (item: { name: string }) => item.name === "Projeto de construção",
+    );
+    if (project) {
       const draft = await (
         await fetch(`/api/v1/projects/${project.id}/draft`)
       ).json();
@@ -110,7 +145,7 @@ export async function workspace(page: Page, guided = false) {
   await expect(
     page.getByRole("tree", { name: "Arquivos do projeto" }),
   ).toBeVisible();
-  await page.getByRole("button", { name: "Usar texto simples" }).click();
+  await editorAction(page, "Usar texto simples");
   return project;
 }
 

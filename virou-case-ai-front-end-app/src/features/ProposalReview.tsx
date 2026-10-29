@@ -1,3 +1,4 @@
+import { MigrationFailureNotice } from "./MigrationFailureNotice";
 import { useEffect, useRef, useState } from "react";
 import {
   AlertCircle,
@@ -72,6 +73,10 @@ export function ProposalReview({
     pending = useRef(false);
   const file =
     proposal.files.find((item) => item.id === selected) ?? proposal.files[0];
+  const migrationHistory =
+    proposal.migration_history?.format_version === 1
+      ? proposal.migration_history
+      : null;
   const filtered = proposal.files.filter((item) =>
     item.path.toLocaleLowerCase().includes(filter.toLocaleLowerCase()),
   );
@@ -214,6 +219,56 @@ export function ProposalReview({
             </span>
           ))}
         </div>
+        {migrationHistory &&
+          (migrationHistory.preserved.length > 0 ||
+            migrationHistory.added.length > 0) && (
+            <details className="proposal-migration-history">
+              <summary>
+                Histórico de migrations · {migrationHistory.preserved.length}{" "}
+                preservada(s) · {migrationHistory.added.length} nova(s)
+              </summary>
+              <div className="proposal-migration-lists">
+                <section aria-label="Migrations preservadas">
+                  <h3>Preservadas sem alteração</h3>
+                  {migrationHistory.preserved.length ? (
+                    <ul>
+                      {migrationHistory.preserved.map((migration) => (
+                        <li
+                          key={migration.path}
+                          title={`SHA-256: ${migration.sha256}`}
+                        >
+                          {migration.path}
+                        </li>
+                      ))}
+                    </ul>
+                  ) : (
+                    <p>Nenhuma migration na revisão-base.</p>
+                  )}
+                </section>
+                <section aria-label="Novas migrations">
+                  <h3>Novos arquivos incrementais</h3>
+                  {migrationHistory.added.length ? (
+                    <ul>
+                      {migrationHistory.added.map((migration) => (
+                        <li
+                          key={migration.path}
+                          title={`SHA-256: ${migration.sha256}`}
+                        >
+                          {migration.path}
+                        </li>
+                      ))}
+                    </ul>
+                  ) : (
+                    <p>Nenhuma migration nova nesta proposta.</p>
+                  )}
+                </section>
+              </div>
+              <p>
+                Aplicar consolida os novos arquivos e passa a protegê-los. O SQL
+                só será enviado ao banco durante a publicação.
+              </p>
+            </details>
+          )}
         {proposal.state === "conflict" && (
           <p className="proposal-alert" role="alert">
             O projeto ou rascunho mudou. A proposta e suas edições foram
@@ -248,6 +303,7 @@ export function ProposalReview({
         {!!error && (
           <div className="proposal-review-error">
             <ErrorNotice error={error} />
+            <MigrationFailureNotice error={error} />
             <button
               className="text-button"
               disabled={busy}

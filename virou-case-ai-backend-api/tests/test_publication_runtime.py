@@ -51,11 +51,6 @@ class ProbeRemote(Remote):
             return [{"success": True, "results": [{"value": "verified"}]}]
         return super().query(database_id, sql, params)
 
-    def upload(self, name, database_id, artifact):
-        result = super().upload(name, database_id, artifact)
-        self.remote["bindings"].append({"type": "assets", "name": "ASSETS"})
-        return result
-
 
 def claim(repo, oid):
     with repo.sessions.begin() as db:

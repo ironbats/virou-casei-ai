@@ -1,7 +1,7 @@
 import { expect, test, type Page } from "@playwright/test";
 import type { Project } from "../src/shared/types";
 import { productionPolicy } from "./productionPolicy";
-import { reviewRequest, workspace } from "./workspaceHelper";
+import { editorAction, reviewRequest, workspace } from "./workspaceHelper";
 
 test.skip(
   process.env.VIRA_E2E_WORKSPACE !== "true",
@@ -102,7 +102,7 @@ async function catalogProject(page: Page, products: number) {
   await expect(
     page.getByRole("tree", { name: "Arquivos do projeto" }),
   ).toBeVisible();
-  await page.getByRole("button", { name: "Usar texto simples" }).click();
+  await editorAction(page, "Usar texto simples");
   await expect(page.locator(".code-editor")).toHaveValue(/<!doctype html>/i);
   return { project: result.project as Project, files };
 }

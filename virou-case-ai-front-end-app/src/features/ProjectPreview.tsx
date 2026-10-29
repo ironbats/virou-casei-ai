@@ -4,9 +4,11 @@ import { RefreshCw } from "lucide-react";
 export function ProjectPreview({
   files,
   dirty,
+  onIssues,
 }: {
   files: Record<string, string>;
   dirty: boolean;
+  onIssues?: (issues: string[]) => void;
 }) {
   const frame = useRef<HTMLIFrameElement>(null);
   const [snapshot, setSnapshot] = useState(files),
@@ -15,6 +17,9 @@ export function ProjectPreview({
     [state, setState] = useState("loading"),
     [issues, setIssues] = useState<string[]>([]),
     [mobile, setMobile] = useState(false);
+  useEffect(() => {
+    onIssues?.(issues);
+  }, [issues, onIssues]);
   const stale =
     Object.keys(files).length !== Object.keys(snapshot).length ||
     Object.keys(files).some((path) => files[path] !== snapshot[path]);

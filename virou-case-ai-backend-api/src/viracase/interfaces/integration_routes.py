@@ -91,6 +91,7 @@ def mount_integration_routes(app, prefix, repo, actor, key, version):
         from viracase.infrastructure.observability import WorkerBuildStatus
         from viracase.infrastructure.models import Operation
         from viracase.infrastructure.publication_verification import verification_summary
+        from viracase.infrastructure.publication_maintenance import automatic_status
         from sqlalchemy import select
 
         with repo.sessions() as db:
@@ -121,7 +122,7 @@ def mount_integration_routes(app, prefix, repo, actor, key, version):
                 stack_readiness.append({
                     "stack": stack,
                     "can_publish": not stack_codes,
-                    "reasons": [{"code": code, "message": MESSAGES[code]} for code in stack_codes],
+                    "reasons": [{"code": code, "message": service.configuration_message(row, code)} for code in stack_codes],
                 })
             return {
                 "can_publish": not codes,
@@ -129,8 +130,9 @@ def mount_integration_routes(app, prefix, repo, actor, key, version):
                 "can_verify": not verification_codes,
                 "verification_reasons": [{"code": c, "message": MESSAGES[c]} for c in verification_codes],
                 "workers": executor.workers,
-                "reasons": [{"code": c, "message": MESSAGES[c]} for c in codes],
+                "reasons": [{"code": c, "message": service.configuration_message(row, c)} for c in codes],
                 "verification": verification_summary(latest),
+                "automatic_verification": automatic_status(repo, row, executor),
             }
 
     @app.post(prefix + "/integration-connections/{identity}/verify-publication", status_code=202)

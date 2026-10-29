@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import {
   ArrowDown,
   CheckCircle2,
@@ -8,6 +8,7 @@ import {
   LoaderCircle,
   MessageSquare,
   Square,
+  Wrench,
 } from "lucide-react";
 import { Link } from "react-router-dom";
 import { date, states } from "../shared/api";
@@ -15,6 +16,7 @@ import type { Operation } from "../shared/types";
 import { Modal } from "../shared/ui";
 import { inProgress } from "./useProjectOperations";
 import { useConversationScroll } from "./useConversationScroll";
+import { MigrationFailureNotice } from "./MigrationFailureNotice";
 
 export function operationMessage(operation: Operation) {
   if (operation.progress_message) return operation.progress_message;
@@ -49,6 +51,9 @@ export function BuildConversation({
   onReview,
   onAnswer,
   onDiscard,
+  analysisContent,
+  onRetryCorrection,
+  correctionBlockedReason = "",
 }: {
   operations: Operation[];
   pid: string;
@@ -62,6 +67,9 @@ export function BuildConversation({
   onReview?: (operation: Operation) => void;
   onAnswer?: (operation: Operation) => void;
   onDiscard?: (operation: Operation) => void;
+  analysisContent?: ReactNode;
+  onRetryCorrection?: (operation: Operation) => void;
+  correctionBlockedReason?: string;
 }) {
   const [now, setNow] = useState(Date.now());
   const [snapshot, setSnapshot] = useState<{
@@ -83,6 +91,9 @@ export function BuildConversation({
       )
       .map((operation) => operation.reply_to),
   );
+  const latestReplies = new Map<string, Operation>();
+  for (const operation of builds)
+    if (operation.reply_to) latestReplies.set(operation.reply_to, operation);
   useEffect(() => {
     if (!active) return;
     setNow(Date.now());
@@ -100,7 +111,7 @@ export function BuildConversation({
         onScroll={scroll.onScroll}
       >
         <div className="build-conversation-content" ref={scroll.content}>
-          {builds.length === 0 && (
+          {builds.length === 0 && !analysisContent && (
             <div className="build-welcome">
               <FileCode2 size={24} aria-hidden="true" />
               <h3>Da sua ideia aos arquivos</h3>
@@ -118,9 +129,17 @@ export function BuildConversation({
             const terminal = !working;
             const question = operation.result_ref.kind === "clarification";
             const answered = question && answeredQuestions.has(operation.id);
-            const progressMessage = answered
-              ? "Sua resposta foi enviada. A continuação está registrada nesta conversa."
-              : operationMessage(operation);
+            const reply = question ? latestReplies.get(operation.id) : null;
+            const resumed =
+              !!operation.reply_to &&
+              (latestReplies.get(operation.reply_to)?.id !== operation.id ||
+                answeredQuestions.has(operation.reply_to));
+            const progressMessage =
+              question && reply
+                ? answered
+                  ? "Sua resposta foi enviada. A continuação está registrada nesta conversa."
+                  : "Sua resposta foi recebida. A continuação não foi concluída; retome pela última tentativa abaixo."
+                : operationMessage(operation);
             const proposal = !!operation.result_ref.candidate && !question;
             const explanation = operation.result_ref.message?.replace(
               /```[\s\S]*?```/g,
@@ -139,15 +158,34 @@ export function BuildConversation({
               )
                 ? operation.id
                 : null;
+            const correction = !!operation.analysis_id && !operation.reply_to;
+            const correctionStale =
+              !!operation.analysis_revision_id &&
+              operation.analysis_revision_id !== loadedRevision;
+            const correctionRetryable =
+              correction &&
+              ["failed", "cancelled"].includes(operation.state) &&
+              !operation.pending_reconciliation &&
+              operation.billing_status !== "reconciliation_pending";
+            const replyRetryable =
+              !!operation.reply_to &&
+              !resumed &&
+              ["failed", "cancelled"].includes(operation.state);
             return (
               <article
                 className="build-turn"
                 key={operation.id}
                 data-state={operation.state}
                 data-kind={operation.result_ref.kind}
+                data-operation-id={operation.id}
               >
                 <div className="build-request">
                   <strong>Você</strong>
+                  {operation.analysis_id && (
+                    <span className="code-correction-label">
+                      Correção a partir da análise IA
+                    </span>
+                  )}
                   <p>{operation.request_text || "Solicitação anterior"}</p>
                   {!!operation.attachment_snapshots?.length && (
                     <div className="sent-attachments">
@@ -185,12 +223,20 @@ export function BuildConversation({
                       {question
                         ? answered
                           ? "Resposta enviada"
-                          : "Aguardando sua resposta"
+                          : reply
+                            ? "Resposta recebida"
+                            : "Aguardando sua resposta"
                         : (states[operation.state] ?? operation.state)}
                     </strong>
                     <span className="sr-only">. {progressMessage}</span>
                   </div>
                   <p>{progressMessage}</p>
+                  {operation.state === "failed" && (
+                    <MigrationFailureNotice
+                      failure={operation.result_ref.migration_failure}
+                      messageShown={progressMessage}
+                    />
+                  )}
                   {(failureCode || failureReference) && (
                     <details className="build-activity">
                       <summary>Detalhes da falha</summary>
@@ -215,10 +261,15 @@ export function BuildConversation({
                   ) : explanation ? (
                     <p className="assistant-message">{explanation}</p>
                   ) : null}
-                  {question && !answered && onAnswer && (
+                  {question && !reply && onAnswer && (
                     <button
                       className="button"
-                      disabled={busy || active}
+                      disabled={
+                        busy ||
+                        active ||
+                        (!!operation.analysis_id &&
+                          (correctionStale || !!correctionBlockedReason))
+                      }
                       onClick={() => onAnswer(operation)}
                     >
                       Responder
@@ -407,12 +458,38 @@ export function BuildConversation({
                           : "Cancelar construção"}
                       </button>
                     )}
+                    {correctionRetryable && onRetryCorrection && (
+                      <button
+                        className="button"
+                        disabled={
+                          busy ||
+                          active ||
+                          correctionStale ||
+                          !!correctionBlockedReason
+                        }
+                        onClick={() => onRetryCorrection(operation)}
+                      >
+                        <Wrench size={16} aria-hidden="true" /> Tentar correção
+                        novamente
+                      </button>
+                    )}
                     {terminal &&
                       operation.state !== "succeeded" &&
+                      !correction &&
+                      (!operation.reply_to || replyRetryable) &&
                       operation.request_text && (
                         <button
                           className="button"
-                          disabled={busy || active}
+                          disabled={
+                            busy ||
+                            active ||
+                            (!!operation.analysis_id &&
+                              (correctionStale ||
+                                !!correctionBlockedReason ||
+                                operation.pending_reconciliation ||
+                                operation.billing_status ===
+                                  "reconciliation_pending"))
+                          }
                           onClick={() =>
                             operation.reply_to && onAnswer
                               ? onAnswer(operation)
@@ -425,10 +502,35 @@ export function BuildConversation({
                         </button>
                       )}
                   </div>
+                  {terminal && operation.state !== "succeeded" && resumed && (
+                    <p className="small muted">
+                      Esta pergunta já possui uma continuação nesta conversa.
+                    </p>
+                  )}
+                  {(correctionRetryable ||
+                    ((replyRetryable || (question && !reply)) &&
+                      !!operation.analysis_id)) &&
+                    (correctionStale || correctionBlockedReason) && (
+                      <p className="small muted">
+                        {correctionStale
+                          ? "A revisão mudou. Peça uma nova análise do código salvo antes de solicitar outra correção."
+                          : correctionBlockedReason}
+                      </p>
+                    )}
+                  {operation.analysis_id &&
+                    (operation.pending_reconciliation ||
+                      operation.billing_status ===
+                        "reconciliation_pending") && (
+                      <p className="small muted">
+                        Aguarde a conferência da tentativa anterior antes de
+                        solicitar outra correção.
+                      </p>
+                    )}
                 </div>
               </article>
             );
           })}
+          {analysisContent}
         </div>
       </div>
       {scroll.awayFromLatest && (

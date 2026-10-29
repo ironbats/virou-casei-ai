@@ -1,7 +1,7 @@
 import { expect, test, type Page } from "@playwright/test";
 import AxeBuilder from "@axe-core/playwright";
 import { productionPolicy } from "./productionPolicy";
-import { workspace } from "./workspaceHelper";
+import { editorAction, workspace } from "./workspaceHelper";
 
 test.skip(
   process.env.VIRA_E2E_WORKSPACE !== "true",
@@ -105,11 +105,11 @@ test("editor com CSP de produção, formatação reversível e sintaxe preservad
     project.id,
   );
   expect(stored).toBe(minified);
-  await page.getByRole("button", { name: "Formatar arquivo" }).click();
+  await editorAction(page, "Formatar arquivo");
   await expect(page.locator(".format-message")).toContainText(
     "Arquivo formatado no rascunho",
   );
-  await page.getByRole("button", { name: "Usar texto simples" }).click();
+  await editorAction(page, "Usar texto simples");
   const formatted = await page.locator(".code-editor").inputValue();
   expect(formatted.split("\n").length).toBeGreaterThan(10);
   expect(formatted).toContain("<h1>Olá</h1>");
@@ -129,16 +129,16 @@ test("editor com CSP de produção, formatação reversível e sintaxe preservad
   ).toBeDisabled();
   await expect(page.getByText("Revisão salva.", { exact: true })).toBeVisible();
   await page.reload();
-  await page.getByRole("button", { name: "Usar texto simples" }).click();
+  await editorAction(page, "Usar texto simples");
   await expect(page.locator(".code-editor")).toHaveValue(formatted);
   await page.getByRole("treeitem", { name: "broken.js", exact: true }).click();
-  await page.getByRole("button", { name: "Formatar arquivo" }).click();
+  await editorAction(page, "Formatar arquivo");
   await expect(page.locator(".format-message")).toContainText(
     "confira a sintaxe",
   );
   await expect(page.locator(".code-editor")).toHaveValue("const = ;");
   await page.getByRole("treeitem", { name: "index.html", exact: true }).click();
-  await page.getByRole("button", { name: "Editor com destaque" }).click();
+  await editorAction(page, "Editor com destaque");
   await page.screenshot({
     path: info.outputPath("ide-formatada-csp.png"),
     fullPage: true,
@@ -260,6 +260,10 @@ test("prévia em celular, erros de JavaScript e arquivo ausente são visíveis",
   await page.setViewportSize({ width: 375, height: 812 });
   await page
     .getByRole("tablist", { name: "Área do projeto" })
+    .getByRole("tab", { name: "Código", exact: true })
+    .click();
+  await page
+    .getByRole("tablist", { name: "Visualização do projeto" })
     .getByRole("tab", { name: "Prévia", exact: true })
     .click();
   await expect(

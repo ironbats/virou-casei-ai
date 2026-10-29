@@ -15,6 +15,7 @@ from viracase.application.conversation import (
 )
 from viracase.application.conversation_turn import InvalidTurn, parse_turn, turn_prompt
 from viracase.application.progress import record_progress
+from viracase.domain.migration_history import migration_manifest
 from viracase.domain.rules import RuleError, cost, utcnow, validate_file_entries, validate_files
 from viracase.infrastructure.agent_execution import execution_fields, execution_timeouts
 from viracase.infrastructure.clarifications import checkpoint_clarification, continuation_files
@@ -24,6 +25,11 @@ from viracase.infrastructure.integration_traces import TraceStore, observe_integ
 from viracase.infrastructure.models import Attempt, Job, Operation
 from viracase.infrastructure.provider_errors import report_rejection
 from viracase.infrastructure.providers import ProviderRejected, ProviderUncertain
+from viracase.infrastructure.publication_migration_context import (
+    published_migration_context,
+    validate_revision_history,
+    validate_revision_migrations,
+)
 from viracase.infrastructure.repository import project_dto
 from viracase.infrastructure.workflow_logging import emit as emit_workflow
 
@@ -34,8 +40,10 @@ def execute_conversation(worker, oid, token):
     calls, files, original = [], None, None
     truncation_retries, batch_character_budget = 0, 0
     feedback, repairs, messages = None, 0, []
+    full_files = False
     context_bytes, input_bound = 0, 0
     provider_calls, accepted_batches = 0, 0
+    confirmed_deletions = set()
     with repo.sessions() as db:
         frozen_policy = db.get(Operation, oid).policy
         max_batches = generation_call_limit(frozen_policy)
@@ -95,6 +103,8 @@ def execute_conversation(worker, oid, token):
             observe("generation_finished", op, "error", phase="settlement", error_code=op.error_code)
             return False
         op.state, op.error_code, job.state = state, error, "done"
+        if isinstance(failure, RuleError) and failure.code.startswith("MIGRATION_"):
+            op.result = {**op.result, "migration_failure": {"code": failure.code, "message": failure.message, **failure.details}}
         record_progress(op, stage or ("proposal_ready" if state == "succeeded" else state))
         if state != "succeeded":
             observe(
@@ -133,7 +143,9 @@ def execute_conversation(worker, oid, token):
                     original = dict(files)
                     if op.policy.get("generation_contract_version") == 4 and op.payload.get("reply_to"):
                         files, messages = continuation_files(op.payload, original, repo.sources.secrets)
+                        confirmed_deletions.update(original.keys() - files.keys())
                 conversational = op.policy.get("generation_contract_version") == 4
+                allow_deletions = conversational and bool(op.payload.get("analysis_id"))
                 input_bound = context_input_bound(op.policy, op.payload, total["input"])
                 batch_character_budget = generation_batch_budget(op.policy, truncation_retries, input_bound)
                 request_limit = (
@@ -142,6 +154,10 @@ def execute_conversation(worker, oid, token):
                     else None
                 )
                 if conversational:
+                    migrations = published_migration_context(
+                        repo, db, p, files, base_revision_id=op.payload["base_revision_id"], baseline_files=original,
+                    )
+                    op.payload = {**op.payload, "publication_migration_context": migrations}
                     prompt = turn_prompt(
                         project_dto(p),
                         attachment_context(op.payload),
@@ -155,6 +171,10 @@ def execute_conversation(worker, oid, token):
                         request_limit_bytes=request_limit,
                         max_batches=max_batches,
                         character_budget=batch_character_budget,
+                        allow_deletions=allow_deletions,
+                        full_files=full_files,
+                        published_migrations=migrations,
+                        confirmed_deletions=confirmed_deletions,
                     )
                 else:
                     prompt = prompt_for(
@@ -168,6 +188,8 @@ def execute_conversation(worker, oid, token):
                         request_limit_bytes=request_limit,
                         max_batches=max_batches,
                         character_budget=batch_character_budget,
+                        protected_migrations=migration_manifest(original),
+                        feedback=feedback,
                     )
                 context_bytes = len(prompt.encode())
             except RuleError as exc:
@@ -189,6 +211,9 @@ def execute_conversation(worker, oid, token):
                 return
             observe("generation_context_ready", op, phase="context")
             policy, stack = dict(op.policy), p.stack
+            if conversational:
+                policy["generation_allow_deletions"] = allow_deletions
+                policy["generation_full_files"] = full_files
             attempt = db.scalar(select(Attempt).where(Attempt.operation_id == oid))
             if not attempt:
                 attempt = Attempt(
@@ -293,7 +318,10 @@ def execute_conversation(worker, oid, token):
                 record_progress(op, "validating_result")
                 if conversational:
                     try:
-                        turn = parse_turn(result.text, files)
+                        turn = parse_turn(
+                            result.text, files, allow_deletions=allow_deletions, full_files=full_files,
+                            confirmed_deletions=confirmed_deletions,
+                        )
                         if turn.action == "implement" and turn.complete and turn.files == original:
                             raise InvalidTurn("NO_CHANGES")
                     except InvalidTurn as exc:
@@ -303,11 +331,17 @@ def execute_conversation(worker, oid, token):
                         )
                         if repairs < recovery["max_response_repairs"] and batch < max_batches - 1:
                             repairs += 1
-                            feedback = exc.reason
+                            feedback = exc.reason + (f" no arquivo {exc.path}" if exc.path else "")
+                            if exc.reason in {"EDIT_TARGET_MISMATCH", "FULL_FILES_REQUIRED"}:
+                                full_files = True
                             record_progress(op, "repairing_response")
                             continue
                         code = (
-                            "GENERATION_EDIT_MISMATCH" if exc.reason == "EDIT_TARGET_MISMATCH" else exc.code
+                            "GENERATION_EDIT_MISMATCH"
+                            if exc.reason in {"EDIT_TARGET_MISMATCH", "FULL_FILES_REQUIRED"}
+                            else "GENERATION_DELETE_MISMATCH"
+                            if exc.reason == "DELETE_TARGET_MISMATCH"
+                            else exc.code
                         )
                         raise RuleError(code, exc.message) from None
                     feedback = None
@@ -324,16 +358,55 @@ def execute_conversation(worker, oid, token):
                             observe("generation_finished", op, phase="clarification", changed_count=0)
                         return
                     next_files, complete = turn.files, turn.complete
-                    if turn.message and turn.message not in messages:
-                        messages.append(turn.message)
                 else:
                     next_files, complete = apply_batch(result.text, files)
                 validate_file_entries(next_files, repo.sources.secrets)
+                p = repo.owned_project(db, a.id, op.project_id)
+                try:
+                    validate_revision_history(
+                        repo, db, p, next_files, base_revision_id=op.payload["base_revision_id"],
+                        baseline_files=original, operation="generation_batch",
+                    )
+                    if complete:
+                        validate_revision_migrations(
+                            repo, db, p, next_files, base_revision_id=op.payload["base_revision_id"],
+                            baseline_files=original, operation="generation_result",
+                        )
+                except RuleError as exc:
+                    if not exc.code.startswith("MIGRATION_"):
+                        raise
+                    observe("generation_response_invalid", op, "warning", error=exc, phase="validation", reason_code=exc.code)
+                    if (
+                        exc.code != "MIGRATION_BASELINE_INCONSISTENT"
+                        and repairs < recovery["max_response_repairs"]
+                        and batch < max_batches - 1
+                    ):
+                        repairs += 1
+                        issues = (exc.details.get("migration_history") or exc.details.get("migration") or {}).get("issues", [])
+                        issue = issues[0] if issues else {}
+                        feedback = exc.code + (f" no arquivo {issue['path']}" if issue.get("path") else "")
+                        if isinstance(issue.get("statement_index"), int):
+                            feedback += f" na instrução {issue['statement_index']}"
+                        if isinstance(issue.get("reason"), str):
+                            feedback += f" ({issue['reason']})"
+                        feedback += ": " + exc.message
+                        record_progress(op, "repairing_response")
+                        continue
+                    raise
+                feedback = None
+                if conversational and turn.message and turn.message not in messages:
+                    messages.append(turn.message)
                 if next_files == files and not complete:
                     raise RuleError("GENERATION_NO_CHANGES", "O lote não trouxe alterações.")
+                confirmed_deletions.update(files.keys() - next_files.keys())
+                confirmed_deletions.difference_update(next_files)
                 files = next_files
                 accepted_batches += 1
-                changed_count = sum(content != original.get(path) for path, content in files.items())
+                changed_paths = [
+                    path for path in sorted(original.keys() | files.keys())
+                    if original.get(path) != files.get(path)
+                ]
+                changed_count = len(changed_paths)
                 observe(
                     "generation_batch_validated", op, phase="validation", changed_count=changed_count,
                     status="complete" if complete else "incomplete",
@@ -348,16 +421,16 @@ def execute_conversation(worker, oid, token):
                     if conversational:
                         op.result = {
                             **op.result,
-                            "working_files": [
-                                path for path in sorted(files) if files[path] != original.get(path)
-                            ],
+                            "working_files": changed_paths,
                         }
                     record_progress(op, "continuing_code")
                     continue
                 changed = [
-                    {"path": path, "change": "modified" if path in original else "created"}
-                    for path, content in sorted(files.items())
-                    if original.get(path) != content
+                    {
+                        "path": path,
+                        "change": "deleted" if path not in files else "modified" if path in original else "created",
+                    }
+                    for path in changed_paths
                 ]
                 if not changed:
                     raise RuleError("GENERATION_NO_CHANGES", "Nenhuma alteração produzida.")
@@ -382,6 +455,7 @@ def execute_conversation(worker, oid, token):
                     "candidate": True,
                     "changed_files": changed,
                     "validation": "structure_checked",
+                    **r.migration_evidence,
                 }
                 if finish(db, op, job, "succeeded"):
                     observe("generation_finished", op, phase="revision", changed_count=len(changed))

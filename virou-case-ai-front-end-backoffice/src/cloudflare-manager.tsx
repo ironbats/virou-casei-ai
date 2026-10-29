@@ -12,6 +12,7 @@ import { ErrorNotice } from "./admin-ui";
 import { IntegrationDialog, useRemote } from "./integration-ui";
 import { Qualification } from "./integration-qualification";
 import { PublicationDiagnosticsPanel } from "./publication-diagnostics";
+import { AutomaticPublicationStatus } from "./automatic-publication-status";
 import {
   verificationStageLabel,
   verificationStateLabel,
@@ -81,6 +82,13 @@ export function CloudflareManager({
   const content = useRef<HTMLDivElement>(null);
   const busy = actionBusy || verificationBusy || qualificationBusy;
   const diagnostic = diagnostics.data;
+  const automatic = diagnostic?.automatic_verification;
+  const validatedAt =
+    automatic?.last_succeeded_at &&
+    (!config.validated_at ||
+      Date.parse(automatic.last_succeeded_at) > Date.parse(config.validated_at))
+      ? automatic.last_succeeded_at
+      : config.validated_at;
   const verification = diagnostic?.verification;
   const active =
     !!verification && ["queued", "running"].includes(verification.state);
@@ -107,9 +115,12 @@ export function CloudflareManager({
       }
     : pending
       ? {
-          title: "A verificação precisa ser retomada",
-          description:
-            "Consulte o diagnóstico e registre o motivo para retomar a operação existente.",
+          title: automatic?.enabled
+            ? "A verificação será retomada automaticamente"
+            : "A verificação precisa ser retomada",
+          description: automatic?.enabled
+            ? "A plataforma retomará a operação existente. Consulte o diagnóstico para acompanhar a recuperação."
+            : "Consulte o diagnóstico e registre o motivo para retomar a operação existente.",
           label: "Revisar verificação",
           run: () => selectTab("verification", true),
         }
@@ -129,32 +140,44 @@ export function CloudflareManager({
               label: "Ativar conexão",
               run: () => chooseAction("activate"),
             }
-          : diagnostic?.can_publish && !config.is_default
+          : automatic?.enabled &&
+              !diagnostic?.can_publish &&
+              ["scheduled", "retry_wait"].includes(automatic.state)
             ? {
-                title: "Conexão disponível para publicação",
-                description:
-                  "Para receber novos projetos nesta conta, defina esta conexão como padrão.",
-                label: "Definir como padrão",
-                run: () => chooseAction("default"),
+                title: "Aguarde a verificação automática",
+                description: automatic.message,
+                label: "Acompanhar verificação",
+                run: () => selectTab("verification", true),
               }
-            : diagnostic?.can_publish
+            : diagnostic?.can_publish && !config.is_default
               ? {
-                  title: partial
-                    ? "Confira os perfis aprovados"
-                    : "Conexão pronta para receber projetos",
-                  description: partial
-                    ? "Os perfis aprovados podem publicar. Revise os demais na verificação."
-                    : "A conexão está ativa e definida como padrão. Consulte os resultados ou execute uma nova verificação quando necessário.",
-                  label: "Ver resultados da verificação",
-                  run: () => selectTab("verification", true),
-                }
-              : {
-                  title: "Confira a liberação da publicação",
+                  title: "Conexão disponível para publicação",
                   description:
-                    "Veja os impedimentos e execute a verificação quando a conexão e o executor estiverem prontos.",
-                  label: "Revisar verificação",
-                  run: () => selectTab("verification", true),
-                };
+                    "Para receber novos projetos nesta conta, defina esta conexão como padrão.",
+                  label: "Definir como padrão",
+                  run: () => chooseAction("default"),
+                }
+              : diagnostic?.can_publish
+                ? {
+                    title: partial
+                      ? "Confira os perfis aprovados"
+                      : "Conexão pronta para receber projetos",
+                    description: partial
+                      ? "Os perfis aprovados podem publicar. Revise os demais na verificação."
+                      : automatic?.enabled
+                        ? "A conexão está ativa e definida como padrão. A verificação será renovada automaticamente antes do vencimento."
+                        : "A conexão está ativa e definida como padrão. Consulte os resultados ou execute uma nova verificação quando necessário.",
+                    label: "Ver resultados da verificação",
+                    run: () => selectTab("verification", true),
+                  }
+                : {
+                    title: "Confira a liberação da publicação",
+                    description: automatic?.enabled
+                      ? "Confira os impedimentos abaixo. A verificação será retomada automaticamente quando a conexão e o executor estiverem prontos."
+                      : "Veja os impedimentos e execute a verificação quando a conexão e o executor estiverem prontos.",
+                    label: "Revisar verificação",
+                    run: () => selectTab("verification", true),
+                  };
 
   return (
     <IntegrationDialog
@@ -283,10 +306,16 @@ export function CloudflareManager({
                       ? verificationStageLabel(verification.stage)
                       : diagnostics.error
                         ? "Atualize o estado para consultar a última verificação."
-                        : "Execute uma verificação para acompanhar os resultados."}
+                        : automatic?.enabled
+                          ? "A primeira verificação será executada automaticamente quando a conexão e o executor estiverem prontos."
+                          : "Execute uma verificação para acompanhar os resultados."}
                   </p>
                 </article>
               </div>
+              <AutomaticPublicationStatus
+                verification={automatic}
+                canPublish={!!diagnostic?.can_publish}
+              />
               <div className="cloudflare-next-step">
                 <div>
                   <h3>{nextStep.title}</h3>
@@ -313,7 +342,7 @@ export function CloudflareManager({
                 </div>
                 <div>
                   <dt>Última validação</dt>
-                  <dd>{date(config.validated_at)}</dd>
+                  <dd>{date(validatedAt)}</dd>
                 </div>
               </dl>
               <p className="field-help cloudflare-scope-note">
@@ -380,7 +409,7 @@ export function CloudflareManager({
                 </div>
                 <div>
                   <dt>Última validação</dt>
-                  <dd>{date(config.validated_at)}</dd>
+                  <dd>{date(validatedAt)}</dd>
                 </div>
               </dl>
               {(qualificationDirty || verificationDirty) && (
