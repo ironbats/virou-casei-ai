@@ -181,7 +181,11 @@ def test_startup_failure_uses_current_attempt_logs_and_preserves_original_exit(t
         if script == "restart-publication.sh" else {"initialize", "storage-init"}
     )
     assert set(log_command[-len(expected_services):]) == expected_services
-    assert not any(command[0] in {"run", "exec", "down", "rm", "stop"} for command in executed)
+    assert not any(command[0] in {"run", "down", "rm", "stop"} for command in executed)
+    assert [command for command in executed if command[0] == "exec"] == (
+        [] if script == "restart-publication.sh"
+        else [["exec", "-T", "--user", "postgres", "postgres", "sh", "-s"]]
+    )
 
 
 @pytest.mark.parametrize("script", SCRIPTS)

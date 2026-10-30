@@ -14,6 +14,22 @@ mkdir -p var/sources var/secrets
 publication_compose config --quiet
 publication_build_images
 startup_started_at="$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
+printf '%s\n' 'Preparando o PostgreSQL e conferindo as credenciais antes das migrations.'
+if publication_compose up -d --no-build --wait --wait-timeout 300 postgres; then
+  :
+else
+  startup_status=$?
+  echo 'DOCKER_STARTUP_FAILED: o PostgreSQL nao ficou pronto; os inicializadores e as APIs nao foram iniciados por esta etapa.' >&2
+  publication_compose logs --no-color --timestamps --since "$startup_started_at" --tail=120 postgres || true
+  exit "$startup_status"
+fi
+if publication_compose exec -T --user postgres postgres sh -s < script/reconcile-db-credentials.sh; then
+  :
+else
+  startup_status=$?
+  echo 'DATABASE_STARTUP_BLOCKED: a verificacao das credenciais falhou. As migrations e a recriacao das APIs nao foram executadas por esta etapa.' >&2
+  exit "$startup_status"
+fi
 if publication_compose up -d --no-build --wait --wait-timeout 300; then
   :
 else

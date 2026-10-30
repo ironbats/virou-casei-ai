@@ -4,13 +4,45 @@ import sys
 from pathlib import Path
 
 from sqlalchemy import create_engine
+from sqlalchemy.exc import SQLAlchemyError
 
 from viracase.infrastructure.bootstrap import bootstrap_admin, report_admin_bootstrap
 from viracase.infrastructure.config import settings
-from viracase.infrastructure.database import database
 from viracase.infrastructure.credentials import initialize_key
+from viracase.infrastructure.database import database
 
 ROOT = Path(__file__).resolve().parents[1]
+
+
+def check_database_access(config):
+    for role, url in (("postgres", config.migration_url()), ("viracase", config.database_url)):
+        options = {"connect_timeout": 5} if url.startswith("postgresql") else {}
+        engine = create_engine(url, connect_args=options)
+        try:
+            with engine.connect() as connection:
+                connection.exec_driver_sql("SELECT 1")
+        except SQLAlchemyError as error:
+            original = getattr(error, "orig", error)
+            state = getattr(original, "sqlstate", None)
+            if state == "28P01" or "password authentication failed" in str(original).lower():
+                code = "DATABASE_AUTH_FAILED"
+                reason = "A senha configurada foi rejeitada pelo PostgreSQL."
+            elif state == "3D000" or (
+                "database" in str(original).lower() and "does not exist" in str(original).lower()
+            ):
+                code = "DATABASE_NOT_FOUND"
+                reason = "O banco configurado nao existe no servidor."
+            else:
+                code = "DATABASE_CONNECTION_FAILED"
+                reason = "Nao foi possivel validar a conexao com o banco."
+            raise ValueError(
+                f"{code}: usuario={role}. {reason} "
+                "No Compose local, execute ./script/run-local.sh para preparar o PostgreSQL. "
+                "As migrations nao foram executadas."
+            ) from None
+        finally:
+            engine.dispose()
+    print("✅ Conexoes de migrations e da aplicacao verificadas.", flush=True)
 
 
 def main():
@@ -18,6 +50,7 @@ def main():
     print("[1/4] Verificando arquivos e permissões das migrations...", flush=True)
     subprocess.run([sys.executable, str(ROOT / "script/check-migrations.py")], cwd=ROOT, check=True)
     config = settings()
+    check_database_access(config)
     print("[2/4] Aplicando migrations pendentes...", flush=True)
     subprocess.run(
         [sys.executable, "-m", "alembic", "--config", str(ROOT / "alembic.ini"), "upgrade", "head"],

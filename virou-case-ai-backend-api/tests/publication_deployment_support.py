@@ -10,7 +10,10 @@ def make_installation(tmp_path):
     root = tmp_path / "backend"
     (root / "script").mkdir(parents=True)
     (root / "bin").mkdir()
-    for name in ("restart-publication.sh", "run-docker.sh", "run-local.sh", "publication-runtime.sh"):
+    for name in (
+        "restart-publication.sh", "run-docker.sh", "run-local.sh", "publication-runtime.sh",
+        "reconcile-db-credentials.sh",
+    ):
         shutil.copy(ROOT / "script" / name, root / "script" / name)
     for name in ("compose.yaml", "compose.override.yaml", "compose.publication-apparmor.yaml"):
         shutil.copy(ROOT / name, root / name)
@@ -53,6 +56,9 @@ case "$1" in
         exit "${DOCKER_TEST_BUILD_EXIT:-0}"
         ;;
       up)
+        if [[ "${!#}" == postgres ]]; then
+          exit "${DOCKER_TEST_POSTGRES_EXIT:-0}"
+        fi
         [[ -z "${DOCKER_TEST_UP_STDERR:-}" ]] || printf '%s\n' "$DOCKER_TEST_UP_STDERR" >&2
         exit "${DOCKER_TEST_UP_EXIT:-0}"
         ;;
@@ -62,6 +68,10 @@ case "$1" in
         ;;
       run) exit "${DOCKER_TEST_CHECK_EXIT:-0}" ;;
       exec)
+        if [[ "$*" == 'exec -T --user postgres postgres sh -s' ]]; then
+          cat >/dev/null
+          exit "${DOCKER_TEST_DATABASE_EXIT:-0}"
+        fi
         code="${DOCKER_TEST_DIAG_EXIT:-0}"
         if [[ "$code" == 0 ]]; then
           printf '{"available":true,"code":"READY"}\n'

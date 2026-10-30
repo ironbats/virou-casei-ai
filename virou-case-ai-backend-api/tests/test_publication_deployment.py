@@ -112,7 +112,9 @@ def test_wrong_actual_profile_cannot_report_success(fake_docker_installation, sc
     assert result.returncode == 1
     assert "APPARMOR_PROFILE_MISMATCH" in result.stderr
     assert "Executor READY" not in result.stdout
-    assert not any(compose_command(call)[:1] == ["exec"] for call in read_calls(root))
+    assert not any(
+        compose_command(call)[:3] == ["exec", "-T", "worker"] for call in read_calls(root)
+    )
 
 
 def test_remote_daemon_never_loads_profile_on_client_host(fake_docker_installation):
