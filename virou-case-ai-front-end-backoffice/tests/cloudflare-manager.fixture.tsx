@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { CloudflareManager } from "../src/cloudflare-manager";
 import { session } from "../src/api";
@@ -22,17 +22,40 @@ const connection: Connection = {
   validated_at: "2026-10-28T12:00:00Z",
 };
 
+const secondary: Connection = {
+  ...connection,
+  id: "configuration-second",
+  connection_id: "connection-second",
+  name: "Cloudflare homologação",
+  is_default: false,
+  version: 3,
+  settings: { account_id: "b".repeat(32), environment: "staging" },
+};
+
 function Fixture() {
-  const [open, setOpen] = useState(false);
+  const [selected, setSelected] = useState<Connection | null>(null);
+  useEffect(() => {
+    const update = (event: Event) => {
+      const detail = (event as CustomEvent<Connection>).detail;
+      setSelected(detail);
+    };
+    window.addEventListener("fixture-connection", update);
+    return () => window.removeEventListener("fixture-connection", update);
+  }, []);
   return (
     <main style={{ padding: 16 }}>
-      <button className="button" onClick={() => setOpen(true)}>
+      <h1>Integrações e templates</h1>
+      <p>Contas Cloudflare de teste</p>
+      <button className="button" onClick={() => setSelected(connection)}>
         Gerenciar Cloudflare produção
       </button>
-      {open && (
+      <button className="button" onClick={() => setSelected(secondary)}>
+        Gerenciar Cloudflare homologação
+      </button>
+      {selected && (
         <CloudflareManager
-          connection={connection}
-          close={() => setOpen(false)}
+          connection={selected}
+          close={() => setSelected(null)}
           changed={() => {}}
         />
       )}

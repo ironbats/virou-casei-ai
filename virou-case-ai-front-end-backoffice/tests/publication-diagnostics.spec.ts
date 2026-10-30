@@ -48,6 +48,7 @@ test("sandbox blocked: concrete stderr and correlation, no remote POST", async (
       exact: true,
     }),
   ).toBeDisabled();
+  await page.getByText("Detalhes técnicos e eventos", { exact: true }).click();
   await expect(
     page.getByText(worker.diagnostic_id, { exact: true }),
   ).toBeVisible();
@@ -142,7 +143,7 @@ test("failed refresh clears stale readiness and disables remote action", async (
       }),
   );
   await page
-    .getByRole("button", { name: "Atualizar diagn\u00f3stico", exact: true })
+    .getByRole("button", { name: "Atualizar estado", exact: true })
     .click();
   await expect(button).toBeDisabled();
   await expect(page.getByRole("alert")).toContainText(
@@ -207,39 +208,37 @@ test("partial verification exposes the failed profile and preserves the approved
       ],
     },
   });
-  await expect(
-    page.getByText("Publicação liberada para os perfis aprovados abaixo.", {
-      exact: true,
-    }),
-  ).toBeVisible();
-  const profiles = page.getByRole("list", {
-    name: "Disponibilidade por perfil",
+  const profiles = page.getByRole("table", {
+    name: "Prontidão de publicação e verificação por perfil",
   });
   await expect(
-    profiles.getByRole("listitem").filter({ hasText: "hono-typescript-d1" }),
-  ).toContainText("Publicação liberada");
+    profiles.getByRole("row").filter({ hasText: "hono-typescript-d1" }),
+  ).toContainText("Liberada");
   await expect(
-    profiles.getByRole("listitem").filter({ hasText: "fastapi-python-d1" }),
-  ).toContainText("Publicação bloqueada");
-  await expect(page.getByRole("alert")).toContainText("fastapi-python-d1");
-  await expect(page.getByRole("alert")).toContainText("verification_uploading");
-  await expect(page.getByRole("alert")).toContainText(failure.message);
+    profiles.getByRole("row").filter({ hasText: "fastapi-python-d1" }),
+  ).toContainText("Bloqueada");
+  const previous = page.locator(".cf-previous-result");
+  await expect(previous).toContainText("fastapi-python-d1");
+  await expect(previous).toContainText("Enviando o Worker");
+  await expect(previous).toContainText("Resultado da publicação ainda não confirmado");
   await page
     .getByText("Resultado por perfil da última verificação", { exact: true })
     .click();
   const results = page.getByRole("list", { name: "Resultado por perfil" });
   await expect(
     results.getByRole("listitem").filter({ hasText: "hono-typescript-d1" }),
-  ).toContainText("Aprovado");
+  ).toContainText("Checks aprovados no histórico");
   await expect(
     results.getByRole("listitem").filter({ hasText: "fastapi-python-d1" }),
   ).toContainText("Não aprovado");
   await expect(
-    page.getByRole("status").filter({ hasText: "A retenção está habilitada." }),
+    page.getByText("Retenção habilitada. Os recursos de teste são preservados, inclusive em caso de falha.", { exact: false }),
   ).toBeVisible();
+  await page.getByText("Detalhes técnicos e eventos", { exact: true }).click();
   await page
     .getByText("Recursos e detalhes da verificação", { exact: true })
     .click();
+  await expect(page.getByRole("region", { name: "Diagnóstico do resultado anterior", exact: true })).toContainText(failure.message);
   await expect(
     page.getByRole("list", { name: "Recursos da verificação" }),
   ).toContainText("database-retained");
@@ -281,6 +280,7 @@ test("retained resources never expose non-HTTPS links", async ({ page }) => {
       ],
     },
   });
+  await page.getByText("Detalhes técnicos e eventos", { exact: true }).click();
   await page
     .getByText("Recursos e detalhes da verificação", { exact: true })
     .click();
@@ -316,6 +316,7 @@ test("retention policy does not imply successful resource creation", async ({
       ],
     },
   });
+  await page.getByText("Detalhes técnicos e eventos", { exact: true }).click();
   await page
     .getByText("Recursos e detalhes da verificação", { exact: true })
     .click();
@@ -350,9 +351,11 @@ test("legacy cleanup remains visible without describing new checks as destructiv
       },
     },
   });
+  await page.getByText("Detalhes técnicos e eventos", { exact: true }).click();
+  await page.getByText("Recursos e detalhes da verificação", { exact: true }).click();
   await expect(
     page.getByText(
-      "Esta verificação antiga removeu os recursos temporários ao terminar.",
+      "Esta verificação antiga removeu recursos temporários ao terminar.",
       { exact: false },
     ),
   ).toBeVisible();

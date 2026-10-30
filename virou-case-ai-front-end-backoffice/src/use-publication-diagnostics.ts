@@ -1,10 +1,12 @@
-import { useCallback, useEffect, useState } from "react";
-import { api } from "./api";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { api, AdminApiError } from "./api";
+import { normalizeSnapshot, type Snapshot } from "./cloudflare-snapshot";
 import type { Connection } from "./integration-types";
 import type { Verification } from "./publication-verification-status";
 import type { AutomaticVerification } from "./automatic-publication-status";
 
 export type PublicationDiagnostic = {
+  snapshot?: Snapshot;
   can_publish: boolean;
   can_verify?: boolean;
   verification_reasons?: { code: string; message: string }[];
@@ -39,62 +41,256 @@ export type PublicationDiagnostic = {
 export function usePublicationDiagnostics(config: Connection) {
   const [data, setData] = useState<PublicationDiagnostic | null>(null);
   const [error, setError] = useState<unknown>(null);
+  const [rawDiagnostic, setRawDiagnostic] = useState("");
   const [loading, setLoading] = useState(true);
-  const [revision, setRevision] = useState(0);
-  const refresh = useCallback(() => setRevision((value) => value + 1), []);
+  const [stale, setStale] = useState(false);
+  const [receivedAt, setReceivedAt] = useState<string | null>(null);
+  const refreshRequest = useRef<() => void>(() => {});
+  const generation = useRef(0);
+  const refresh = useCallback(() => refreshRequest.current(), []);
 
   useEffect(() => {
-    const controller = new AbortController();
-    let timer: number;
+    let alive = true;
+    let request: AbortController | null = null;
+    let timer: number | undefined;
+    let current: PublicationDiagnostic | null = null;
+    let unauthorized = false;
+    let refreshPending = false;
     setData(null);
+    setRawDiagnostic("");
     setError(null);
+    setStale(false);
+    setReceivedAt(null);
     setLoading(true);
+    generation.current += 1;
+    const schedule = (delay: number | null) => {
+      window.clearTimeout(timer);
+      if (
+        alive &&
+        !unauthorized &&
+        !document.hidden &&
+        delay != null &&
+        delay > 0
+      ) {
+        timer = window.setTimeout(() => void load(), Math.max(1000, delay));
+      }
+    };
+    const interval = (result: PublicationDiagnostic) => {
+      if (result.snapshot)
+        return (
+          result.snapshot.poll_after_ms ??
+          result.snapshot.polling?.interval_ms ??
+          null
+        );
+      const state = result.verification?.state;
+      const automatic = result.automatic_verification;
+      return (state && ["queued", "running", "reconciling"].includes(state)) ||
+        (automatic &&
+          ["scheduled", "retry_wait", "queued", "running"].includes(
+            automatic.state,
+          ))
+        ? 4000
+        : null;
+    };
     async function load() {
-      const request = new AbortController();
-      const cancel = () => request.abort();
+      if (!alive || request || unauthorized || document.hidden) return;
+      window.clearTimeout(timer);
+      request = new AbortController();
+      const controller = request;
+      const sequence = ++generation.current;
       let timedOut = false;
-      controller.signal.addEventListener("abort", cancel, { once: true });
+      let retry: number | null = null;
+      setLoading(true);
       const timeout = window.setTimeout(() => {
         timedOut = true;
-        request.abort();
+        controller.abort();
       }, 12000);
       try {
         const result = await api<PublicationDiagnostic>(
           `/integration-connections/${config.connection_id}/publication-diagnostics`,
-          { signal: request.signal },
+          { signal: controller.signal },
         );
-        if (!controller.signal.aborted) {
-          setData(result);
-          setError(null);
+        if (
+          !alive ||
+          sequence !== generation.current ||
+          controller.signal.aborted
+        )
+          return;
+        const originalDiagnostic = JSON.stringify(result, null, 2);
+        if (result.snapshot)
+          result.snapshot = normalizeSnapshot(result.snapshot);
+        result.can_publish = result.can_publish === true;
+        result.reasons = Array.isArray(result.reasons)
+          ? result.reasons.filter(
+              (item) =>
+                item &&
+                typeof item.code === "string" &&
+                typeof item.message === "string",
+            )
+          : [];
+        result.verification_reasons = Array.isArray(result.verification_reasons)
+          ? result.verification_reasons.filter(
+              (item) =>
+                item &&
+                typeof item.code === "string" &&
+                typeof item.message === "string",
+            )
+          : [];
+        result.stack_readiness = Array.isArray(result.stack_readiness)
+          ? result.stack_readiness
+              .filter((item) => item && typeof item.stack === "string")
+              .map((item) => ({
+                ...item,
+                can_publish: item.can_publish === true,
+                reasons: Array.isArray(item.reasons)
+                  ? item.reasons.filter(
+                      (reason) =>
+                        reason &&
+                        typeof reason.code === "string" &&
+                        typeof reason.message === "string",
+                    )
+                  : [],
+              }))
+          : [];
+        result.workers = Array.isArray(result.workers)
+          ? result.workers
+              .filter((item) => item && typeof item.id === "string")
+              .map((item) => ({
+                ...item,
+                available: item.available === true,
+                message:
+                  typeof item.message === "string"
+                    ? item.message
+                    : "Estado do executor não informado",
+                checked_at:
+                  typeof item.checked_at === "string" ? item.checked_at : "",
+              }))
+          : [];
+        if (!result.verification || typeof result.verification.id !== "string")
+          result.verification = null;
+        else {
+          result.verification.stack_results = Array.isArray(
+            result.verification.stack_results,
+          )
+            ? result.verification.stack_results
+            : [];
+          result.verification.resources = Array.isArray(
+            result.verification.resources,
+          )
+            ? result.verification.resources
+            : [];
         }
-      } catch (failure) {
-        if (!controller.signal.aborted) {
-          setData(null);
-          setError(
-            timedOut
-              ? new Error(
-                  "O diagnóstico demorou para responder. A consulta será tentada novamente automaticamente.",
-                )
-              : failure,
+        if (
+          result.snapshot &&
+          result.snapshot.connection.id !== config.connection_id
+        ) {
+          throw new Error(
+            "O diagnóstico recebido é incompatível com esta conexão. Atualize o estado.",
           );
         }
+        const acceptedVersion = Number(
+          current?.snapshot?.connection.configuration_version,
+        );
+        const incomingVersion = Number(
+          result.snapshot?.connection.configuration_version,
+        );
+        if (
+          Number.isFinite(incomingVersion) &&
+          (incomingVersion < config.version ||
+            (Number.isFinite(acceptedVersion) &&
+              incomingVersion < acceptedVersion))
+        ) {
+          throw new Error(
+            "Uma leitura anterior da configuração foi descartada. Atualize o estado.",
+          );
+        }
+        current = result;
+        setData(result);
+        setRawDiagnostic(originalDiagnostic);
+        setError(null);
+        setStale(false);
+        setReceivedAt(new Date().toISOString());
+        retry = interval(result);
+      } catch (failure) {
+        if (!alive || sequence !== generation.current) return;
+        if (controller.signal.aborted && !timedOut) return;
+        if (
+          failure instanceof AdminApiError &&
+          [401, 403, 404].includes(failure.status)
+        ) {
+          current = null;
+          setData(null);
+          setRawDiagnostic("");
+          setReceivedAt(null);
+          unauthorized = true;
+        }
+        setStale(true);
+        setError(
+          timedOut
+            ? new Error(
+                "O diagnóstico demorou para responder. A consulta será tentada novamente automaticamente.",
+              )
+            : failure,
+        );
+        retry = unauthorized ? null : 4000;
       } finally {
         window.clearTimeout(timeout);
-        controller.signal.removeEventListener("abort", cancel);
-        if (!controller.signal.aborted) {
+        if (request === controller) request = null;
+        if (alive && sequence === generation.current) {
           setLoading(false);
-          timer = window.setTimeout(load, 4000);
+          if (refreshPending && !unauthorized) {
+            refreshPending = false;
+            schedule(1000);
+          } else schedule(retry);
         }
       }
     }
+    const expire = () => {
+      unauthorized = true;
+      generation.current += 1;
+      request?.abort();
+      window.clearTimeout(timer);
+      current = null;
+      setData(null);
+      setRawDiagnostic("");
+      setReceivedAt(null);
+      setLoading(false);
+      setStale(true);
+      setError(
+        new Error(
+          "Sessão expirada. Entre novamente para consultar o diagnóstico.",
+        ),
+      );
+    };
+    const visibility = () => {
+      if (document.hidden) {
+        window.clearTimeout(timer);
+      } else {
+        void load();
+      }
+    };
+    const reconnect = () => void load();
+    refreshRequest.current = () => {
+      if (request) refreshPending = true;
+      else void load();
+    };
+    window.addEventListener("admin-expired", expire);
+    window.addEventListener("online", reconnect);
+    document.addEventListener("visibilitychange", visibility);
     void load();
     return () => {
-      controller.abort();
+      alive = false;
+      generation.current += 1;
+      request?.abort();
       window.clearTimeout(timer);
+      window.removeEventListener("admin-expired", expire);
+      window.removeEventListener("online", reconnect);
+      document.removeEventListener("visibilitychange", visibility);
+      refreshRequest.current = () => {};
     };
-  }, [config.connection_id, config.version, config.state, revision]);
+  }, [config.connection_id, config.version, config.state]);
 
-  return { data, error, loading, refresh };
+  return { data, rawDiagnostic, error, loading, stale, receivedAt, refresh };
 }
 
 export type PublicationDiagnosticsRemote = ReturnType<

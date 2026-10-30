@@ -106,6 +106,8 @@ ERRORS = {
 
 def record_progress(operation, stage):
     result = dict(operation.result or {})
+    if getattr(operation, "type", None) == "publication_check" and operation.state in {"succeeded", "failed", "cancelled"}:
+        result["verification_finished_at"] = result.get("verification_finished_at") or utcnow().isoformat()
     events = list(result.get("activity", []))
     if not events or events[-1]["stage"] != stage:
         events.append({"stage": stage, "at": utcnow().isoformat()})

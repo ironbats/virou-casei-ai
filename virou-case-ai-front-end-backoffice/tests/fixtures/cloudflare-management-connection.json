@@ -1,0 +1,47 @@
+{
+  "id": "7be532b9-c347-4c36-868e-9e85677c8e31",
+  "version": 1,
+  "state": "active",
+  "settings": {
+    "account_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "token_type": "user",
+    "environment": "test",
+    "worker_prefix": "lab",
+    "compatibility_date": "2026-10-27",
+    "allowed_stacks": [
+      "hono-typescript-d1"
+    ],
+    "max_projects": 5,
+    "validation_hours": 24,
+    "timeout_seconds": 5,
+    "max_concurrent": 2,
+    "spa": false,
+    "plan": "free",
+    "allow_paid": false
+  },
+  "validation": {
+    "ready": true,
+    "subdomain": "synthetic-test",
+    "database_ids": [],
+    "workers_count": 0,
+    "checked_at": "2026-10-30T12:49:22.571803+00:00",
+    "automatic_verification": {
+      "state": "running",
+      "operation_id": "3c1c55e2-d3ff-45ce-b88a-4d6419fe4126",
+      "consecutive_failures": 3,
+      "next_attempt_at": "2026-10-30T12:55:22.605843+00:00",
+      "last_error_code": "PUBLICATION_API_NOT_READY",
+      "executor_digest": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+    }
+  },
+  "configuration_digest": "a83e4b1220908ab44ace7068ad71d6e7d3a58edc6b824fb66ddc43467f527c03",
+  "has_token": true,
+  "created_at": "2026-10-30T12:49:22.485138+00:00",
+  "validated_at": "2026-10-30T12:49:22.571849+00:00",
+  "connection_id": "c30635ce-e79a-4873-bfc4-e358207bb036",
+  "name": "Cloudflare principal",
+  "is_default": true,
+  "active_version": 1,
+  "defaults": {},
+  "executor_digest": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+}

@@ -217,6 +217,7 @@ class RemoteVerifier:
         except httpx.DecodingError:
             result.update(code="HTTP_ENCODING_INVALID", retryable=False)
         result["duration_ms"] = round((self.clock() - started) * 1000)
+        result["observed_at"] = utcnow().isoformat()
         return result
 
     @staticmethod

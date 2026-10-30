@@ -144,16 +144,18 @@ def events(repo, actor, service=None, level=None, correlation=None, project=None
         }
 
 
-def runtime_snapshot(repo):
-    with repo.sessions() as db:
-        rows = db.scalars(select(RuntimeStatus).where(RuntimeStatus.id.like("worker:%"))).all()
-        current = [r for r in rows if aware(r.checked_at) > utcnow() - timedelta(seconds=60)]
-        return [{"id": r.id, "checked_at": aware(r.checked_at).isoformat(), **r.details} for r in current]
+def runtime_snapshot(repo, db=None):
+    if db is None:
+        with repo.sessions() as session:
+            return runtime_snapshot(repo, session)
+    rows = db.scalars(select(RuntimeStatus).where(RuntimeStatus.id.like("worker:%"))).all()
+    current = [r for r in rows if aware(r.checked_at) > utcnow() - timedelta(seconds=60)]
+    return [{"id": r.id, "checked_at": aware(r.checked_at).isoformat(), **r.details} for r in current]
 
 
 class WorkerBuildStatus:
-    def __init__(self, repo):
-        self.workers = runtime_snapshot(repo)
+    def __init__(self, repo, db=None):
+        self.workers = runtime_snapshot(repo, db)
 
     def available(self):
         return bool(self.workers) and all(w.get("available") for w in self.workers)

@@ -2,8 +2,8 @@ import { useEffect, useState } from "react";
 import { command } from "./api";
 import { ErrorNotice } from "./admin-ui";
 import type { Connection } from "./integration-types";
-import { PublicationVerificationStatus } from "./publication-verification-status";
-import { AutomaticPublicationStatus } from "./automatic-publication-status";
+import { managementSnapshot, timestamp } from "./cloudflare-snapshot";
+import { StaleNotice, VerificationReadiness } from "./cloudflare-readiness";
 import {
   usePublicationDiagnostics,
   type PublicationDiagnosticsRemote,
@@ -31,7 +31,11 @@ export function PublicationDiagnosticsPanel({
   onDirty,
   changed,
   remote,
-}: Props & { remote: PublicationDiagnosticsRemote }) {
+  diagnosticTarget,
+}: Props & {
+  remote: PublicationDiagnosticsRemote;
+  diagnosticTarget?: number;
+}) {
   const { data, error: remoteError, loading, refresh } = remote;
   const [error, setError] = useState<unknown>(null);
   const [busy, setBusy] = useState(false);
@@ -43,28 +47,30 @@ export function PublicationDiagnosticsPanel({
   useEffect(() => {
     setCopied(false);
   }, [config.connection_id, config.version]);
-  const active =
-    data?.verification &&
-    ["queued", "running"].includes(data.verification.state);
-  const resuming = data?.verification?.state === "reconciling";
+  const snapshot = managementSnapshot(data, config);
+  const current = snapshot?.current_run;
+  const active = !!current && ["queued", "running"].includes(current.state);
+  const resuming = current?.raw_state === "reconciling";
+  const permitted = snapshot?.actions.find(
+    (item) => item.key === (resuming ? "resume" : "verify"),
+  );
   const executorBlocked =
     !resuming &&
     (data?.can_verify === false ||
       (data &&
         (!data.workers.length ||
           !data.workers.every((worker) => worker.available))));
-  const diagnosticText = data ? JSON.stringify(data, null, 2) : "";
-  const automaticallyPending =
-    data?.automatic_verification?.enabled &&
-    ["scheduled", "queued", "running", "retry_wait"].includes(
-      data.automatic_verification.state,
-    );
+  const diagnosticText =
+    remote.rawDiagnostic || (data ? JSON.stringify(data, null, 2) : "");
   const disabled =
     !data ||
+    remote.stale ||
+    loading ||
     busy ||
     blocked ||
     !!active ||
     !!executorBlocked ||
+    permitted?.enabled === false ||
     reason.trim().length < 8 ||
     !["active", "validated"].includes(config.state);
   return (
@@ -72,291 +78,287 @@ export function PublicationDiagnosticsPanel({
       className="publication-diagnostics"
       aria-label="Diagnóstico da publicação"
     >
-      <div className="cloudflare-section-heading">
-        <div>
-          <h3>Verificação da publicação</h3>
-          <p className="field-help">
-            Acompanhe a conexão e os perfis disponíveis para publicação.
-          </p>
-        </div>
-        <button
-          type="button"
-          className="button"
-          disabled={busy || loading}
-          onClick={refresh}
-        >
-          Atualizar diagnóstico
-        </button>
-      </div>
       <ErrorNotice error={remoteError || error} />
-      <p
-        className={`notice ${data?.can_publish ? "success" : ""}`}
-        role="status"
-      >
-        {!data
-          ? loading
-            ? "Consultando executor…"
-            : "Não foi possível consultar o diagnóstico. Tente atualizar."
-          : data.can_publish
-            ? data.stack_readiness?.some((profile) => !profile.can_publish)
-              ? "Publicação liberada para os perfis aprovados abaixo."
-              : "Publicação liberada para esta conexão."
-            : automaticallyPending
-              ? "A publicação aguarda a verificação automática. O estado será atualizado aqui."
-              : "Publicação bloqueada: resolva os itens abaixo."}
-      </p>
-      {data && (
-        <p className="field-help">
-          Esta verificação valida a conexão e os perfis. A preparação do código,
-          as migrations e o resultado de cada projeto são conferidos na própria
-          publicação.
-        </p>
+      {remote.stale && (
+        <StaleNotice snapshot={snapshot} receivedAt={remote.receivedAt} />
       )}
-      {!!data?.reasons.length && (
-        <ul className="cloudflare-reasons">
-          {data.reasons.map((item) => (
-            <li key={item.code}>
-              {item.message} <small>({item.code})</small>
-            </li>
-          ))}
-        </ul>
-      )}
-      {!!data?.stack_readiness?.length && (
-        <ul
-          className="cloudflare-profiles"
-          aria-label="Disponibilidade por perfil"
-        >
-          {data.stack_readiness.map((profile) => (
-            <li key={profile.stack}>
-              <code>{profile.stack}</code>
-              <strong
-                className={profile.can_publish ? "cloudflare-success" : ""}
-              >
-                {profile.can_publish
-                  ? "Publicação liberada"
-                  : "Publicação bloqueada"}
-              </strong>
-              {profile.reasons.map((item) => (
-                <p key={item.code}>
-                  {item.message} <small>({item.code})</small>
-                </p>
-              ))}
-            </li>
-          ))}
-        </ul>
-      )}
-      <AutomaticPublicationStatus
-        verification={data?.automatic_verification}
-        canPublish={!!data?.can_publish}
-      />
-      {data?.verification && (
-        <PublicationVerificationStatus verification={data.verification} />
-      )}
-      <form
-        className="cloudflare-verification-form"
-        onSubmit={async (event) => {
-          event.preventDefault();
-          if (disabled) return;
-          setBusy(true);
-          onBusy(true);
-          setError(null);
-          try {
-            const pending =
-              data?.verification?.state === "reconciling"
-                ? data.verification
-                : null;
-            await command(
-              pending
-                ? `/publication-checks/${pending.id}/resume`
-                : `/integration-connections/${config.connection_id}/verify-publication`,
-              { reason },
-              "POST",
-              pending ? undefined : config.version,
-            );
-            setReason("");
-            refresh();
-            changed();
-          } catch (failure) {
-            setError(failure);
-          } finally {
-            setBusy(false);
-            onBusy(false);
-          }
-        }}
-      >
-        <h3>
-          {resuming
-            ? "Retomar a verificação"
-            : active
-              ? "Verificação em andamento"
-              : "Executar verificação"}
-        </h3>
-        <p className="field-help">
-          {data?.automatic_verification?.enabled &&
-            "A renovação automática está habilitada e não exige verificações manuais. Use esta ação para antecipar uma conferência. "}
-          O resultado é atualizado automaticamente. Workers e bancos D1 de
-          verificação são preservados na Cloudflare.
-        </p>
-        <details className="cloudflare-explanation">
-          <summary>O que esta verificação faz?</summary>
-          <p>
-            A verificação cria ou reutiliza um Worker e um banco D1 por perfil
-            na conta configurada, verifica isolamento, build, publicação e
-            leitura/escrita, e preserva esses recursos ao terminar, inclusive em
-            caso de falha. Novos recursos precisam de vagas livres. Projetos
-            existentes não são alterados.
-          </p>
-        </details>
-        {executorBlocked && (
-          <div className="notice" role="status">
-            <p>
-              A verificação remota não pode iniciar enquanto o executor ou a
-              conexão não estiverem prontos. Corrija o diagnóstico abaixo e
-              atualize o estado. Nenhuma permissão Cloudflare remove um bloqueio
-              local do sandbox.
-            </p>
-            {!!data?.verification_reasons?.length && (
-              <ul>
-                {data.verification_reasons.map((item) => (
-                  <li key={item.code}>{item.message}</li>
-                ))}
-              </ul>
-            )}
-          </div>
-        )}
-        <label>
-          Motivo da verificação
-          <input
-            required
-            minLength={8}
-            value={reason}
-            maxLength={300}
-            disabled={busy || blocked || !!active}
-            onChange={(event) => setReason(event.target.value)}
-            aria-describedby="verification-reason-help"
-          />
-        </label>
-        <p className="field-help" id="verification-reason-help">
-          Descreva o motivo com pelo menos 8 caracteres para registrar esta
-          ação.
-        </p>
-        <div className="actions">
-          <button type="submit" className="button primary" disabled={disabled}>
-            {busy
-              ? "Agendando…"
-              : active
-                ? "Verificação em andamento"
-                : resuming
-                  ? "Retomar verificação"
-                  : "Verificar publicação"}
-          </button>
-          {reason && (
-            <button
-              type="button"
-              className="button"
-              disabled={busy || blocked}
-              onClick={() => setReason("")}
-            >
-              Limpar motivo
-            </button>
-          )}
-        </div>
-      </form>
-      <details className="cloudflare-technical" open={!!executorBlocked}>
-        <summary>Executor e diagnóstico técnico</summary>
-        {data?.workers.length === 0 && (
-          <p className="notice">
-            Nenhum worker enviou sinal nos últimos 60 segundos. Inicie ou
-            verifique o serviço worker.
-          </p>
-        )}
-        {data?.workers.map((worker) => (
-          <div
-            key={worker.id}
-            className={`notice ${worker.available ? "success" : "error"}`}
-            role="status"
+      <VerificationReadiness
+        snapshot={snapshot}
+        stale={remote.stale}
+        loading={loading}
+        refresh={refresh}
+        diagnosticTarget={diagnosticTarget}
+        commandChildren={
+          <form
+            className="cloudflare-verification-form"
+            onSubmit={async (event) => {
+              event.preventDefault();
+              if (disabled) return;
+              setBusy(true);
+              onBusy(true);
+              setError(null);
+              try {
+                const pending = resuming ? current : null;
+                await command(
+                  pending
+                    ? `/publication-checks/${pending.operation_id || pending.id}/resume`
+                    : `/integration-connections/${config.connection_id}/verify-publication`,
+                  { reason },
+                  "POST",
+                  pending ? undefined : config.version,
+                );
+                setReason("");
+                refresh();
+                changed();
+              } catch (failure) {
+                setError(failure);
+              } finally {
+                setBusy(false);
+                onBusy(false);
+              }
+            }}
           >
-            <strong>
-              {worker.available
-                ? "Executor disponível"
-                : "Executor indisponível"}
-            </strong>{" "}
-            {worker.code && <small>({worker.code})</small>}
-            <p>{worker.message}</p>
-            {worker.failed_checks && worker.failed_checks.length > 0 && (
-              <small>
-                Controles não aprovados: {worker.failed_checks.join(", ")}
-              </small>
-            )}
-            {worker.diagnostic_id && (
-              <p className="diagnostic-id">
-                Diagnóstico: <code>{worker.diagnostic_id}</code>
-              </p>
-            )}
-            {worker.remediation && (
+            <h3>
+              {resuming
+                ? "Retomar a verificação"
+                : active
+                  ? "Verificação em andamento"
+                  : "Executar verificação"}
+            </h3>
+            <p className="field-help">
+              {data?.automatic_verification?.enabled &&
+                "A renovação automática está habilitada e não exige verificações manuais. Use esta ação para antecipar uma conferência. "}
+              O resultado é atualizado automaticamente. Workers e bancos D1 de
+              verificação são preservados na Cloudflare.
+            </p>
+            <details className="cloudflare-explanation">
+              <summary>O que esta verificação faz?</summary>
               <p>
-                <strong>Próxima ação:</strong> {worker.remediation}
+                A verificação cria ou reutiliza um Worker e um banco D1 por
+                perfil na conta configurada, verifica isolamento, build,
+                publicação e leitura/escrita, e preserva esses recursos ao
+                terminar, inclusive em caso de falha. Novos recursos precisam de
+                vagas livres. Projetos existentes não são alterados.
               </p>
-            )}
-            {worker.details && (
-              <details className="executor-details">
-                <summary>Detalhes técnicos do executor</summary>
+            </details>
+            {(executorBlocked || (permitted?.enabled === false && !active)) && (
+              <div className="notice" role="status">
                 <p>
-                  Etapa: <code>{worker.details.stage ?? "não informada"}</code>{" "}
-                  · Código de saída:{" "}
-                  <code>{worker.details.exit_code ?? "não iniciado"}</code>
+                  A verificação remota não pode iniciar enquanto o executor ou a
+                  conexão não estiverem prontos. Corrija o diagnóstico abaixo e
+                  atualize o estado. Nenhuma permissão Cloudflare remove um
+                  bloqueio local do sandbox.
                 </p>
-                {worker.details.exception_type && (
-                  <p>
-                    Exceção: <code>{worker.details.exception_type}</code>
-                  </p>
+                {permitted?.disabled_reason && (
+                  <p>{permitted.disabled_reason}</p>
                 )}
-                {worker.details.stderr && (
-                  <pre aria-label="Erro sanitizado do executor">
-                    {worker.details.stderr}
-                  </pre>
+                {!!data?.verification_reasons?.length && (
+                  <ul>
+                    {data.verification_reasons.map((item) => (
+                      <li key={item.code}>{item.message}</li>
+                    ))}
+                  </ul>
                 )}
-                {worker.environment && (
-                  <pre aria-label="Ambiente do executor">
-                    {JSON.stringify(worker.environment, null, 2)}
-                  </pre>
-                )}
-              </details>
+              </div>
             )}
-            <small>
-              Último heartbeat:{" "}
-              {new Date(worker.checked_at).toLocaleString("pt-BR")}
-            </small>
-          </div>
-        ))}
-        {data && (
-          <details className="executor-details">
-            <summary>Diagnóstico completo para suporte</summary>
+            <label>
+              Motivo da verificação
+              <input
+                required
+                minLength={8}
+                value={reason}
+                maxLength={300}
+                disabled={busy || blocked || !!active || remote.stale}
+                onChange={(event) => setReason(event.target.value)}
+                aria-describedby="verification-reason-help"
+              />
+            </label>
+            <p className="field-help" id="verification-reason-help">
+              Descreva o motivo com pelo menos 8 caracteres para registrar esta
+              ação.
+            </p>
             <div className="actions">
               <button
-                type="button"
-                className="button"
-                onClick={async () => {
-                  try {
-                    await navigator.clipboard.writeText(diagnosticText);
-                    setCopied(true);
-                  } catch {
-                    setCopied(false);
-                    setError(
-                      new Error(
-                        "Não foi possível copiar. Selecione e copie o texto do diagnóstico abaixo.",
-                      ),
-                    );
-                  }
-                }}
+                type="submit"
+                className="button primary"
+                disabled={disabled}
               >
-                {copied ? "Diagnóstico copiado" : "Copiar diagnóstico"}
+                {busy
+                  ? "Agendando…"
+                  : active
+                    ? "Verificação em andamento"
+                    : resuming
+                      ? "Retomar verificação"
+                      : "Verificar publicação"}
               </button>
+              {reason && (
+                <button
+                  type="button"
+                  className="button"
+                  disabled={busy || blocked}
+                  onClick={() => setReason("")}
+                >
+                  Limpar motivo
+                </button>
+              )}
             </div>
-            <pre>{diagnosticText}</pre>
-          </details>
-        )}
-      </details>
+          </form>
+        }
+        technicalChildren={
+          <>
+            {data?.automatic_verification && (
+              <details className="cf-details">
+                <summary>Histórico da renovação automática</summary>
+                <p>{data.automatic_verification.message}</p>
+                <dl className="cf-technical-definition">
+                  <div>
+                    <dt>Renovação automática</dt>
+                    <dd>
+                      {data.automatic_verification.enabled
+                        ? "Habilitada"
+                        : "Desativada"}
+                    </dd>
+                  </div>
+                  <div>
+                    <dt>Estado do agendamento</dt>
+                    <dd>
+                      <code>{data.automatic_verification.state}</code>
+                    </dd>
+                  </div>
+                  <div>
+                    <dt>Última tentativa</dt>
+                    <dd>
+                      {timestamp(data.automatic_verification.last_attempt_at)}
+                    </dd>
+                  </div>
+                  <div>
+                    <dt>Última verificação aprovada</dt>
+                    <dd>
+                      {timestamp(data.automatic_verification.last_succeeded_at)}
+                    </dd>
+                  </div>
+                  <div>
+                    <dt>Agendamento informado</dt>
+                    <dd>
+                      {timestamp(data.automatic_verification.next_attempt_at)}
+                    </dd>
+                  </div>
+                  <div>
+                    <dt>Último código de falha</dt>
+                    <dd>
+                      <code>
+                        {data.automatic_verification.last_error_code ||
+                          "Não informado"}
+                      </code>
+                    </dd>
+                  </div>
+                </dl>
+              </details>
+            )}
+            <details
+              className="cloudflare-technical"
+              open={executorBlocked ? true : undefined}
+            >
+              <summary>Executor e diagnóstico técnico</summary>
+              {data?.workers.length === 0 && (
+                <p className="notice">
+                  Nenhum worker enviou sinal nos últimos 60 segundos. Inicie ou
+                  verifique o serviço worker.
+                </p>
+              )}
+              {data?.workers.map((worker) => (
+                <div
+                  key={worker.id}
+                  className={`notice ${worker.available ? "success" : "error"}`}
+                  role="status"
+                >
+                  <strong>
+                    {worker.available
+                      ? "Executor disponível"
+                      : "Executor indisponível"}
+                  </strong>{" "}
+                  {worker.code && <small>({worker.code})</small>}
+                  <p>{worker.message}</p>
+                  {worker.failed_checks && worker.failed_checks.length > 0 && (
+                    <small>
+                      Controles não aprovados: {worker.failed_checks.join(", ")}
+                    </small>
+                  )}
+                  {worker.diagnostic_id && (
+                    <p className="diagnostic-id">
+                      Diagnóstico: <code>{worker.diagnostic_id}</code>
+                    </p>
+                  )}
+                  {worker.remediation && (
+                    <p>
+                      <strong>Próxima ação:</strong> {worker.remediation}
+                    </p>
+                  )}
+                  {worker.details && (
+                    <details className="executor-details">
+                      <summary>Detalhes técnicos do executor</summary>
+                      <p>
+                        Etapa:{" "}
+                        <code>{worker.details.stage ?? "não informada"}</code> ·
+                        Código de saída:{" "}
+                        <code>
+                          {worker.details.exit_code ?? "não iniciado"}
+                        </code>
+                      </p>
+                      {worker.details.exception_type && (
+                        <p>
+                          Exceção: <code>{worker.details.exception_type}</code>
+                        </p>
+                      )}
+                      {worker.details.stderr && (
+                        <pre aria-label="Erro sanitizado do executor">
+                          {worker.details.stderr}
+                        </pre>
+                      )}
+                      {worker.environment && (
+                        <pre aria-label="Ambiente do executor">
+                          {JSON.stringify(worker.environment, null, 2)}
+                        </pre>
+                      )}
+                    </details>
+                  )}
+                  <small>
+                    Último heartbeat:{" "}
+                    {new Date(worker.checked_at).toLocaleString("pt-BR")}
+                  </small>
+                </div>
+              ))}
+              {data && (
+                <details className="executor-details">
+                  <summary>Diagnóstico completo para suporte</summary>
+                  <div className="actions">
+                    <button
+                      type="button"
+                      className="button"
+                      onClick={async () => {
+                        try {
+                          await navigator.clipboard.writeText(diagnosticText);
+                          setCopied(true);
+                        } catch {
+                          setCopied(false);
+                          setError(
+                            new Error(
+                              "Não foi possível copiar. Selecione e copie o texto do diagnóstico abaixo.",
+                            ),
+                          );
+                        }
+                      }}
+                    >
+                      {copied ? "Diagnóstico copiado" : "Copiar diagnóstico"}
+                    </button>
+                  </div>
+                  <pre>{diagnosticText}</pre>
+                </details>
+              )}
+            </details>
+          </>
+        }
+      />
     </section>
   );
 }

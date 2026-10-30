@@ -1,0 +1,635 @@
+{
+  "can_publish": false,
+  "stack_readiness": [
+    {
+      "stack": "hono-typescript-d1",
+      "can_publish": false,
+      "reasons": [
+        {
+          "code": "CAPABILITY_UNVALIDATED",
+          "message": "A publicação aguarda a verificação operacional na conexão Cloudflare do backoffice."
+        }
+      ]
+    }
+  ],
+  "can_verify": true,
+  "verification_reasons": [],
+  "workers": [
+    {
+      "id": "worker:management-test",
+      "checked_at": "2026-10-30T12:49:22.597538+00:00",
+      "available": true,
+      "fingerprint": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "stacks": [
+        "hono-typescript-d1"
+      ]
+    }
+  ],
+  "reasons": [
+    {
+      "code": "CAPABILITY_UNVALIDATED",
+      "message": "A publicação aguarda a verificação operacional na conexão Cloudflare do backoffice."
+    }
+  ],
+  "verification": {
+    "id": "3c1c55e2-d3ff-45ce-b88a-4d6419fe4126",
+    "state": "running",
+    "stage": "verification_remote",
+    "error_code": null,
+    "failed_stage": null,
+    "failure": null,
+    "cleanup": null,
+    "resources": [],
+    "stack": "hono-typescript-d1",
+    "stack_results": [],
+    "remote_verification": null,
+    "activity": [],
+    "temporary_resources": false
+  },
+  "automatic_verification": {
+    "enabled": true,
+    "state": "running",
+    "message": "Verificação automática em andamento. O estado da publicação será atualizado ao concluir.",
+    "next_attempt_at": "2026-10-30T12:55:22.605843+00:00",
+    "last_attempt_at": null,
+    "last_succeeded_at": null,
+    "last_error_code": "PUBLICATION_API_NOT_READY",
+    "consecutive_failures": 3,
+    "operation_id": "3c1c55e2-d3ff-45ce-b88a-4d6419fe4126"
+  },
+  "snapshot": {
+    "schema_version": 1,
+    "revision_order": "request_generation",
+    "observed_at": "2026-10-30T12:49:22.615947+00:00",
+    "server_time": "2026-10-30T12:49:22.615947+00:00",
+    "connection": {
+      "id": "c30635ce-e79a-4873-bfc4-e358207bb036",
+      "name": "Cloudflare principal",
+      "active": true,
+      "state": "active",
+      "is_default": true,
+      "environment": "test",
+      "account_masked": "aaaa…aaaa",
+      "configuration_id": "7be532b9-c347-4c36-868e-9e85677c8e31",
+      "configuration_version": 1,
+      "configuration_fingerprint": "a83e4b1220908ab44ace7068ad71d6e7d3a58edc6b824fb66ddc43467f527c03",
+      "executor_fingerprint": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+    },
+    "credential": {
+      "state": "valid",
+      "type": "credential_and_account",
+      "checked_at": "2026-10-30T12:49:22.571849+00:00",
+      "valid_until": "2026-10-31T12:49:22.571849+00:00",
+      "reason_code": null
+    },
+    "qualification": {
+      "state": "not_started",
+      "checked_at": null,
+      "valid_until": null,
+      "reason_code": null
+    },
+    "publication": {
+      "allowed": false,
+      "state": "blocked",
+      "reason_code": "CAPABILITY_UNVALIDATED",
+      "reason_text": "A publicação aguarda a verificação operacional na conexão Cloudflare do backoffice.",
+      "reasons": [
+        {
+          "code": "CAPABILITY_UNVALIDATED",
+          "message": "A publicação aguarda a verificação operacional na conexão Cloudflare do backoffice."
+        }
+      ],
+      "evaluated_at": "2026-10-30T12:49:22.615947+00:00",
+      "applicable_profiles": [
+        "hono-typescript-d1"
+      ]
+    },
+    "current_run": {
+      "id": "3c1c55e2-d3ff-45ce-b88a-4d6419fe4126",
+      "operation_id": "3c1c55e2-d3ff-45ce-b88a-4d6419fe4126",
+      "configuration_id": "7be532b9-c347-4c36-868e-9e85677c8e31",
+      "configuration_version": 1,
+      "configuration_fingerprint": "a83e4b1220908ab44ace7068ad71d6e7d3a58edc6b824fb66ddc43467f527c03",
+      "executor_fingerprint": null,
+      "configuration_current": true,
+      "state": "running",
+      "raw_state": "running",
+      "profile_ids": [
+        "hono-typescript-d1"
+      ],
+      "active_profile_ids": [
+        "hono-typescript-d1"
+      ],
+      "current_step_ids": [
+        "hono-typescript-d1:verification_remote"
+      ],
+      "started_at": "2026-10-30T12:49:22.604270+00:00",
+      "finished_at": null,
+      "last_event_at": "2026-10-30T12:49:22.604323+00:00",
+      "duration_ms": 11,
+      "duration_kind": "elapsed",
+      "steps": [
+        {
+          "id": "connection:verification_isolation",
+          "order": 0,
+          "label": "Validar isolamento do executor",
+          "stage": "verification_isolation",
+          "phase_id": "prepare",
+          "state": "succeeded",
+          "profile_id": null,
+          "started_at": "2026-10-30T12:49:22.604283+00:00",
+          "finished_at": "2026-10-30T12:49:22.604297+00:00",
+          "message": null,
+          "probes": []
+        },
+        {
+          "id": "connection:verification_configuration",
+          "order": 1,
+          "label": "Validar conta e credencial",
+          "stage": "verification_configuration",
+          "phase_id": "prepare",
+          "state": "succeeded",
+          "profile_id": null,
+          "started_at": "2026-10-30T12:49:22.604311+00:00",
+          "finished_at": "2026-10-30T12:49:22.604317+00:00",
+          "message": null,
+          "probes": []
+        },
+        {
+          "id": "hono-typescript-d1:verification_cloudflare",
+          "order": 2,
+          "label": "Conferir recursos de teste",
+          "stage": "verification_cloudflare",
+          "phase_id": "prepare",
+          "state": "not_started",
+          "profile_id": "hono-typescript-d1",
+          "started_at": null,
+          "finished_at": null,
+          "message": null,
+          "probes": []
+        },
+        {
+          "id": "hono-typescript-d1:verification_d1",
+          "order": 3,
+          "label": "Confirmar escrita e leitura no D1",
+          "stage": "verification_d1",
+          "phase_id": "prepare",
+          "state": "not_started",
+          "profile_id": "hono-typescript-d1",
+          "started_at": null,
+          "finished_at": null,
+          "message": null,
+          "probes": []
+        },
+        {
+          "id": "hono-typescript-d1:verification_building",
+          "order": 4,
+          "label": "Preparar aplicação de teste",
+          "stage": "verification_building",
+          "phase_id": "publish",
+          "state": "not_started",
+          "profile_id": "hono-typescript-d1",
+          "started_at": null,
+          "finished_at": null,
+          "message": null,
+          "probes": []
+        },
+        {
+          "id": "hono-typescript-d1:verification_uploading",
+          "order": 5,
+          "label": "Publicar aplicação de teste",
+          "stage": "verification_uploading",
+          "phase_id": "publish",
+          "state": "not_started",
+          "profile_id": "hono-typescript-d1",
+          "started_at": null,
+          "finished_at": null,
+          "message": null,
+          "probes": []
+        },
+        {
+          "id": "hono-typescript-d1:verification_bindings",
+          "order": 6,
+          "label": "Confirmar bindings e revisão",
+          "stage": "verification_bindings",
+          "phase_id": "publish",
+          "state": "not_started",
+          "profile_id": "hono-typescript-d1",
+          "started_at": null,
+          "finished_at": null,
+          "message": null,
+          "probes": []
+        },
+        {
+          "id": "hono-typescript-d1:verification_routing",
+          "order": 7,
+          "label": "Ativar endereço público",
+          "stage": "verification_routing",
+          "phase_id": "publish",
+          "state": "not_started",
+          "profile_id": "hono-typescript-d1",
+          "started_at": null,
+          "finished_at": null,
+          "message": null,
+          "probes": []
+        },
+        {
+          "id": "hono-typescript-d1:verification_remote",
+          "order": 8,
+          "label": "Validar HTTP e JSON",
+          "stage": "verification_remote",
+          "phase_id": "validate",
+          "state": "running",
+          "profile_id": "hono-typescript-d1",
+          "started_at": "2026-10-30T12:49:22.604323+00:00",
+          "finished_at": null,
+          "message": null,
+          "probes": []
+        },
+        {
+          "id": "connection:verification_result",
+          "order": 9,
+          "label": "Consolidar resultado",
+          "stage": "verification_result",
+          "phase_id": "consolidate",
+          "state": "not_started",
+          "profile_id": null,
+          "started_at": null,
+          "finished_at": null,
+          "message": null,
+          "probes": []
+        }
+      ],
+      "error_code": null,
+      "error_summary": null,
+      "failed_stage": null,
+      "failed_profile": null,
+      "correlation_id": "3c1c55e2-d3ff-45ce-b88a-4d6419fe4126",
+      "events": [
+        {
+          "id": "3c1c55e2-d3ff-45ce-b88a-4d6419fe4126:1:1",
+          "order": 1,
+          "stage": "verification_isolation",
+          "label": "Validar isolamento do executor",
+          "state": "running",
+          "profile_id": null,
+          "at": "2026-10-30T12:49:22.604283+00:00",
+          "error_code": null
+        },
+        {
+          "id": "3c1c55e2-d3ff-45ce-b88a-4d6419fe4126:1:2",
+          "order": 2,
+          "stage": "verification_isolation",
+          "label": "Validar isolamento do executor",
+          "state": "succeeded",
+          "profile_id": null,
+          "at": "2026-10-30T12:49:22.604297+00:00",
+          "error_code": null
+        },
+        {
+          "id": "3c1c55e2-d3ff-45ce-b88a-4d6419fe4126:1:3",
+          "order": 3,
+          "stage": "verification_configuration",
+          "label": "Validar conta e credencial",
+          "state": "running",
+          "profile_id": null,
+          "at": "2026-10-30T12:49:22.604311+00:00",
+          "error_code": null
+        },
+        {
+          "id": "3c1c55e2-d3ff-45ce-b88a-4d6419fe4126:1:4",
+          "order": 4,
+          "stage": "verification_configuration",
+          "label": "Validar conta e credencial",
+          "state": "succeeded",
+          "profile_id": null,
+          "at": "2026-10-30T12:49:22.604317+00:00",
+          "error_code": null
+        },
+        {
+          "id": "3c1c55e2-d3ff-45ce-b88a-4d6419fe4126:1:5",
+          "order": 5,
+          "stage": "verification_remote",
+          "label": "Validar HTTP e JSON",
+          "state": "running",
+          "profile_id": "hono-typescript-d1",
+          "at": "2026-10-30T12:49:22.604323+00:00",
+          "error_code": null
+        }
+      ],
+      "failure": null,
+      "stack_results": [],
+      "remote_verification": null,
+      "resources": [],
+      "cleanup": null
+    },
+    "previous_result": {
+      "id": "f73cf09d-8d48-4079-a3ed-ce08fe76e881",
+      "operation_id": "f73cf09d-8d48-4079-a3ed-ce08fe76e881",
+      "configuration_id": "7be532b9-c347-4c36-868e-9e85677c8e31",
+      "configuration_version": 1,
+      "configuration_fingerprint": "a83e4b1220908ab44ace7068ad71d6e7d3a58edc6b824fb66ddc43467f527c03",
+      "executor_fingerprint": null,
+      "configuration_current": true,
+      "state": "failed",
+      "raw_state": "failed",
+      "profile_ids": [
+        "hono-typescript-d1"
+      ],
+      "active_profile_ids": [],
+      "current_step_ids": [],
+      "started_at": "2026-10-30T12:44:22.601456+00:00",
+      "finished_at": "2026-10-30T12:45:22.601456+00:00",
+      "last_event_at": null,
+      "duration_ms": 60000,
+      "duration_kind": "finished",
+      "steps": [
+        {
+          "id": "connection:verification_isolation",
+          "order": 0,
+          "label": "Validar isolamento do executor",
+          "stage": "verification_isolation",
+          "phase_id": "prepare",
+          "state": "unknown",
+          "profile_id": null,
+          "started_at": null,
+          "finished_at": null,
+          "message": null,
+          "probes": []
+        },
+        {
+          "id": "connection:verification_configuration",
+          "order": 1,
+          "label": "Validar conta e credencial",
+          "stage": "verification_configuration",
+          "phase_id": "prepare",
+          "state": "unknown",
+          "profile_id": null,
+          "started_at": null,
+          "finished_at": null,
+          "message": null,
+          "probes": []
+        },
+        {
+          "id": "hono-typescript-d1:verification_cloudflare",
+          "order": 2,
+          "label": "Conferir recursos de teste",
+          "stage": "verification_cloudflare",
+          "phase_id": "prepare",
+          "state": "unknown",
+          "profile_id": "hono-typescript-d1",
+          "started_at": null,
+          "finished_at": null,
+          "message": null,
+          "probes": []
+        },
+        {
+          "id": "hono-typescript-d1:verification_d1",
+          "order": 3,
+          "label": "Confirmar escrita e leitura no D1",
+          "stage": "verification_d1",
+          "phase_id": "prepare",
+          "state": "unknown",
+          "profile_id": "hono-typescript-d1",
+          "started_at": null,
+          "finished_at": null,
+          "message": null,
+          "probes": []
+        },
+        {
+          "id": "hono-typescript-d1:verification_building",
+          "order": 4,
+          "label": "Preparar aplicação de teste",
+          "stage": "verification_building",
+          "phase_id": "publish",
+          "state": "unknown",
+          "profile_id": "hono-typescript-d1",
+          "started_at": null,
+          "finished_at": null,
+          "message": null,
+          "probes": []
+        },
+        {
+          "id": "hono-typescript-d1:verification_uploading",
+          "order": 5,
+          "label": "Publicar aplicação de teste",
+          "stage": "verification_uploading",
+          "phase_id": "publish",
+          "state": "unknown",
+          "profile_id": "hono-typescript-d1",
+          "started_at": null,
+          "finished_at": null,
+          "message": null,
+          "probes": []
+        },
+        {
+          "id": "hono-typescript-d1:verification_bindings",
+          "order": 6,
+          "label": "Confirmar bindings e revisão",
+          "stage": "verification_bindings",
+          "phase_id": "publish",
+          "state": "unknown",
+          "profile_id": "hono-typescript-d1",
+          "started_at": null,
+          "finished_at": null,
+          "message": null,
+          "probes": []
+        },
+        {
+          "id": "hono-typescript-d1:verification_routing",
+          "order": 7,
+          "label": "Ativar endereço público",
+          "stage": "verification_routing",
+          "phase_id": "publish",
+          "state": "unknown",
+          "profile_id": "hono-typescript-d1",
+          "started_at": null,
+          "finished_at": null,
+          "message": null,
+          "probes": []
+        },
+        {
+          "id": "hono-typescript-d1:verification_remote",
+          "order": 8,
+          "label": "Validar HTTP e JSON",
+          "stage": "verification_remote",
+          "phase_id": "validate",
+          "state": "unknown",
+          "profile_id": "hono-typescript-d1",
+          "started_at": null,
+          "finished_at": null,
+          "message": null,
+          "probes": [
+            {
+              "key": "api",
+              "state": "failed",
+              "observed_http_status": 200,
+              "expected_summary": "HTTP 200 com objeto JSON; indicadores de saúde não podem ser falsos",
+              "observed_summary": "INVALID_JSON",
+              "error_code": "INVALID_JSON",
+              "observed_at": "2026-10-30T12:45:22.601456+00:00",
+              "duration_ms": 12
+            }
+          ]
+        },
+        {
+          "id": "connection:verification_result",
+          "order": 9,
+          "label": "Consolidar resultado",
+          "stage": "verification_result",
+          "phase_id": "consolidate",
+          "state": "unknown",
+          "profile_id": null,
+          "started_at": null,
+          "finished_at": null,
+          "message": null,
+          "probes": []
+        }
+      ],
+      "error_code": "PUBLICATION_API_NOT_READY",
+      "error_summary": "API não respondeu como esperado",
+      "failed_stage": "verification_remote",
+      "failed_profile": "hono-typescript-d1",
+      "correlation_id": "f73cf09d-8d48-4079-a3ed-ce08fe76e881",
+      "events": [],
+      "failure": {
+        "code": "PUBLICATION_API_NOT_READY",
+        "message": "A API não confirmou HTTP e JSON.",
+        "stage": "verification_remote",
+        "stack": "hono-typescript-d1",
+        "at": "2026-10-30T12:45:22.601456+00:00",
+        "details": {
+          "passed": false,
+          "attempts": [
+            {
+              "attempt": 1,
+              "passed": false,
+              "checks": [
+                {
+                  "name": "api",
+                  "path": "/api/health",
+                  "passed": false,
+                  "status": 200,
+                  "code": "INVALID_JSON",
+                  "observed_at": "2026-10-30T12:45:22.601456+00:00",
+                  "duration_ms": 12
+                }
+              ]
+            }
+          ]
+        }
+      },
+      "stack_results": [
+        {
+          "stack": "hono-typescript-d1",
+          "passed": false,
+          "failure": {
+            "code": "PUBLICATION_API_NOT_READY",
+            "message": "A API não confirmou HTTP e JSON.",
+            "stage": "verification_remote",
+            "stack": "hono-typescript-d1",
+            "at": "2026-10-30T12:45:22.601456+00:00",
+            "details": {
+              "passed": false,
+              "attempts": [
+                {
+                  "attempt": 1,
+                  "passed": false,
+                  "checks": [
+                    {
+                      "name": "api",
+                      "path": "/api/health",
+                      "passed": false,
+                      "status": 200,
+                      "code": "INVALID_JSON",
+                      "observed_at": "2026-10-30T12:45:22.601456+00:00",
+                      "duration_ms": 12
+                    }
+                  ]
+                }
+              ]
+            }
+          },
+          "state": "failed",
+          "configuration_current": true,
+          "observed_at": "2026-10-30T12:45:22.601456+00:00"
+        }
+      ],
+      "remote_verification": null,
+      "resources": [],
+      "cleanup": null
+    },
+    "profiles": [
+      {
+        "id": "hono-typescript-d1",
+        "label": "hono-typescript-d1",
+        "publication": {
+          "allowed": false,
+          "state": "blocked",
+          "reason_code": "CAPABILITY_UNVALIDATED",
+          "reason_text": "A publicação aguarda a verificação operacional na conexão Cloudflare do backoffice.",
+          "reasons": [
+            {
+              "code": "CAPABILITY_UNVALIDATED",
+              "message": "A publicação aguarda a verificação operacional na conexão Cloudflare do backoffice."
+            }
+          ],
+          "evaluated_at": "2026-10-30T12:49:22.615947+00:00",
+          "applicable_profiles": [
+            "hono-typescript-d1"
+          ]
+        },
+        "verification_state": "running",
+        "evidence_run_id": null,
+        "evidence_valid_until": null,
+        "evidence_state": "not_started",
+        "evidence_source": null
+      }
+    ],
+    "retry": {
+      "scheduled": false,
+      "next_attempt_at": null,
+      "failure_count": 3,
+      "count_scope": "consecutive_failures",
+      "count_label": "Falhas consecutivas da verificação automática desta configuração",
+      "reason_code": "PUBLICATION_API_NOT_READY",
+      "reason_text": "Verificação automática em andamento. O estado da publicação será atualizado ao concluir.",
+      "state": "running",
+      "overdue": false
+    },
+    "retention": {
+      "enabled": true,
+      "resource_count": 0,
+      "summary": "Retenção habilitada. Os recursos de teste são preservados, inclusive em caso de falha."
+    },
+    "actions": [
+      {
+        "key": "refresh",
+        "label": "Atualizar estado",
+        "enabled": true,
+        "disabled_reason": null,
+        "kind": "read"
+      },
+      {
+        "key": "verify",
+        "label": "Verificar publicação agora",
+        "enabled": false,
+        "disabled_reason": "Já existe uma verificação em execução ou aguardando retomada.",
+        "kind": "command"
+      },
+      {
+        "key": "resume",
+        "label": "Retomar verificação pendente",
+        "enabled": false,
+        "disabled_reason": "Não há verificação pendente para retomar.",
+        "kind": "command"
+      }
+    ],
+    "polling": {
+      "active": true,
+      "interval_ms": 3000
+    },
+    "poll_after_ms": 3000,
+    "revision": "8b49d1459f9c837a594262c3b6a2a0ac3ed70b95e575f8b76e7934f1f53a50ee"
+  }
+}

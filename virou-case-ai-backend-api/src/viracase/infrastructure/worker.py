@@ -10,6 +10,7 @@ from sqlalchemy import and_, delete, or_, select, update
 
 from viracase.application.generation import generated_files, generation_prompt
 from viracase.application.progress import record_progress
+from viracase.application.verification_progress import queue_verification_attempt
 from viracase.domain.rules import RuleError, aware, cost, utcnow, validate_files
 from viracase.infrastructure.agent_execution import execution_timeouts
 from viracase.infrastructure.models import (
@@ -97,6 +98,8 @@ class Worker:
                     )
                     attempt.state, job.state = "uncertain", "reconciling"
                 else:
+                    if op.type == "publication_check":
+                        queue_verification_attempt(op)
                     op.state, job.state = "queued", "queued"
                     op.progress_stage = "queued"
                 record_progress(op, op.progress_stage)

@@ -4,6 +4,12 @@ from uuid import NAMESPACE_URL, uuid5
 from sqlalchemy import select
 
 from viracase.application.progress import record_progress
+from viracase.application.verification_progress import (
+    begin_verification_attempt,
+    finish_verification_attempt,
+    queue_verification_attempt,
+    record_verification_step,
+)
 from viracase.domain.rules import RuleError, aware, canonical_hash, utcnow
 from viracase.infrastructure.cloudflare_gateway import CloudflareGateway, PublicationUncertain
 from viracase.infrastructure.configuration_lock import configuration_lock
@@ -12,10 +18,13 @@ from viracase.infrastructure.models import Audit, IntegrationConfig, Job, Operat
 from viracase.infrastructure.publication_build import IsolatedBuild
 from viracase.infrastructure.publication_check_resources import retained_resource, verification_resource_name
 from viracase.infrastructure.publication_logging import emit, exception_fields
-from viracase.infrastructure.templates import starter
 from viracase.infrastructure.publication_verification import (
-    VERIFICATION_FORMAT_VERSION, VerificationFailure, confirm_bindings, failure_record,
+    VERIFICATION_FORMAT_VERSION,
+    VerificationFailure,
+    confirm_bindings,
+    failure_record,
 )
+from viracase.infrastructure.templates import starter
 
 CHECKS = {
     "no_network",
@@ -143,8 +152,7 @@ def _execute_check(worker, oid, token, gateway_factory=CloudflareGateway, builde
 
     def stage(name, **values):
         nonlocal current_stage
-        if current_stage != name:
-            emit("publication_check_stage", operation_id=oid, stage=name)
+        changed_stage = current_stage != name
         current_stage = name
         with repo.sessions.begin() as db:
             op = db.get(Operation, oid)
@@ -152,9 +160,29 @@ def _execute_check(worker, oid, token, gateway_factory=CloudflareGateway, builde
             job = db.scalar(select(Job).where(Job.operation_id == oid).with_for_update())
             if job.lease_token != token:
                 raise RuleError("LEASE_LOST", "Verificação assumida por outra execução.")
+            if name == "verification_isolation":
+                begin_verification_attempt(op)
             op.state, op.result = "running", {**op.result, **values}
+            record_verification_step(op, name, current_stack)
             job.lease_until = utcnow() + timedelta(minutes=15)
             record_progress(op, name)
+        if changed_stage:
+            emit("publication_check_stage", operation_id=oid, connection_id=connection_id,
+                 configuration_id=config_id, configuration_version=config_version,
+                 run_id=oid if op.result.get("verification_attempt", 1) == 1 else f"{oid}:{op.result['verification_attempt']}",
+                 profile_id=current_stack, step_id=name, stage=name, outcome="running")
+
+    def outcome(name, state="succeeded", code=None):
+        with repo.sessions.begin() as db:
+            op = db.get(Operation, oid)
+            job = db.scalar(select(Job).where(Job.operation_id == oid).with_for_update())
+            if job.lease_token != token:
+                raise RuleError("LEASE_LOST", "Verificação assumida por outra execução.")
+            record_verification_step(op, name, current_stack, state, code)
+        emit("publication_check_step_outcome", operation_id=oid, connection_id=connection_id,
+             configuration_id=config_id, configuration_version=config_version,
+             run_id=oid if op.result.get("verification_attempt", 1) == 1 else f"{oid}:{op.result['verification_attempt']}",
+             profile_id=current_stack, step_id=name, outcome=state)
 
     def persist(values):
         with repo.sessions.begin() as db:
@@ -170,7 +198,7 @@ def _execute_check(worker, oid, token, gateway_factory=CloudflareGateway, builde
         op = db.get(Operation, oid)
         cfg = db.get(IntegrationConfig, op.policy["config_id"])
         policy, secret = dict(cfg.settings), registry.vault.decrypt(cfg.id, cfg.credential)
-        config_id, actor, connection_id = cfg.id, op.account_id, op.payload["connection_id"]
+        config_id, config_version, actor, connection_id = cfg.id, cfg.version, op.account_id, op.payload["connection_id"]
         automatic = op.payload.get("automatic") is True
         evidence = dict(op.result)
         current = registry.latest(db, "cloudflare", connection_id=connection_id)
@@ -210,6 +238,7 @@ def _execute_check(worker, oid, token, gateway_factory=CloudflareGateway, builde
     def record_failure(exc):
         nonlocal failure
         detail = failure_record(exc, current_stage, current_stack, (secret,))
+        outcome(current_stage, "failed", detail["code"])
         if failure is None or (
             automatic and isinstance(failure, RuleError) and failure.code in TRANSIENT_FAILURES
             and (not isinstance(exc, RuleError) or exc.code not in TRANSIENT_FAILURES)
@@ -238,11 +267,14 @@ def _execute_check(worker, oid, token, gateway_factory=CloudflareGateway, builde
         fingerprint = builder.fingerprint()
         if not fingerprint:
             raise RuleError("EXECUTOR_UNAVAILABLE", "Toolchain incompleta.")
+        outcome("verification_isolation")
         stage("verification_configuration")
         validation = gateway.validate()
         if not validation.get("ready"):
             raise RuleError(validation.get("code", "CONFIGURATION_INVALID"),
                             "A conexão Cloudflare não passou na verificação.")
+        outcome("verification_configuration")
+        persist({"verification_executor_digest": fingerprint})
         known_databases = set(validation.get("database_ids", []))
         workers_count = validation.get("workers_count", 100)
         for stack in policy["allowed_stacks"]:
@@ -292,6 +324,7 @@ def _execute_check(worker, oid, token, gateway_factory=CloudflareGateway, builde
                 resource["database_id"] = database_id
                 known_databases.add(database_id)
                 save_resources(resource)
+                outcome("verification_cloudflare")
                 stage("verification_d1", database_id=database_id)
                 gateway.query(database_id, "CREATE TABLE IF NOT EXISTS __viracase_probe (id TEXT PRIMARY KEY, value TEXT)")
                 gateway.query(database_id, "INSERT OR REPLACE INTO __viracase_probe (id,value) VALUES (?,?)", [oid, "verified"])
@@ -302,12 +335,16 @@ def _execute_check(worker, oid, token, gateway_factory=CloudflareGateway, builde
                     for row in item["results"]
                 ):
                     raise VerificationFailure("PUBLICATION_D1_PROBE_FAILED", {"read_back_matches": False})
+                outcome("verification_d1")
                 if already_uploaded:
+                    outcome("verification_building", "skipped")
+                    outcome("verification_uploading", "skipped")
                     deployment_id = prior.get("deployment_id")
                     resource["upload_recovered"] = True
                 else:
                     stage("verification_building")
                     artifact = builder.build(starter(stack), stack, revision, repo.sources.secrets)
+                    outcome("verification_building")
                     stage("verification_uploading")
                     resource["upload_started"] = True
                     save_resources(resource)
@@ -319,16 +356,20 @@ def _execute_check(worker, oid, token, gateway_factory=CloudflareGateway, builde
                         raise
                     if not settings:
                         workers_count += 1
+                    outcome("verification_uploading")
                 resource["deployment_id"] = deployment_id
                 resource["worker_confirmed"] = True
                 save_resources(resource)
                 stage("verification_bindings", deployment_id=deployment_id)
                 bindings = confirm_bindings(gateway, name, database_id, revision, policy["timeout_seconds"])
+                outcome("verification_bindings")
                 stage("verification_routing")
                 gateway.enable(name)
+                outcome("verification_routing")
                 stage("verification_remote")
                 gateway.verification_observer = lambda report: stage("verification_remote", remote_verification=report)
                 remote_report = gateway.verify(resource["url"], revision)
+                outcome("verification_remote")
                 tested.append(stack)
                 reports.append({"stack": stack, "revision_id": revision, "passed": True,
                                 "bindings": bindings, "remote": remote_report})
@@ -387,6 +428,8 @@ def _execute_check(worker, oid, token, gateway_factory=CloudflareGateway, builde
             "tested_at": utcnow().isoformat(),
             "expires_at": (utcnow() + timedelta(hours=policy["validation_hours"])).isoformat(),
             "operation_id": oid, "resource_policy": "retain",
+            "verification_attempt": op.result.get("verification_attempt", 1),
+            "run_id": oid if op.result.get("verification_attempt", 1) == 1 else f"{oid}:{op.result['verification_attempt']}",
         }
         from viracase.infrastructure.publication_qualification import qualified
 
@@ -402,6 +445,9 @@ def _execute_check(worker, oid, token, gateway_factory=CloudflareGateway, builde
                 "workers_count": workers_count,
                 "runtime_verification": {"report": report, "digest": canonical_hash(report)},
             }
+        record_verification_step(op, "verification_result", None, "failed" if failure else "succeeded",
+                                 failure.code if isinstance(failure, RuleError) else None)
+        finish_verification_attempt(op)
         op.state, job.state = ("failed" if failure else "succeeded"), "done"
         op.error_code = failure.code if isinstance(failure, RuleError) else "PUBLICATION_VERIFICATION_FAILED" if failure else None
         record_progress(op, "verification_partial" if failure else "verification_complete")
@@ -418,6 +464,7 @@ def resume_check(repo, actor, oid, key, reason):
         if not op or op.type != "publication_check" or op.state != "reconciling":
             raise RuleError("OPERATION_CONFLICT", "Não há verificação pendente para retomar.")
         job = db.scalar(select(Job).where(Job.operation_id == oid).with_for_update())
+        queue_verification_attempt(op)
         op.state, op.error_code, job.state, job.available_at = "queued", None, "queued", utcnow()
         record_progress(op, "verification_queued")
         db.add(Audit(actor_id=actor, action="publication:verify_resumed", resource_id=oid, reason=reason))

@@ -94,7 +94,7 @@ test("visão geral concisa, navegação por teclado e layout de 320 a 1440 pixel
   await expect(
     dialog
       .getByRole("tabpanel", { name: "Visão geral", exact: true })
-      .getByText("Publicação liberada", { exact: true }),
+      .getByText("Liberada", { exact: true }),
   ).toBeVisible();
   await expect(
     dialog.getByRole("button", {
@@ -190,13 +190,13 @@ test("renovação automática mantém publicação válida e recupera expiraçã
     exact: true,
   });
   const renewal = overview.getByRole("region", {
-    name: "Renovação automática da publicação",
+    name: "Próximo passo",
   });
   await expect(
-    overview.getByText("Publicação liberada", { exact: true }),
+    overview.getByText("Liberada", { exact: true }),
   ).toBeVisible();
-  await expect(renewal).toContainText("enquanto ela permanecer válida");
-  await expect(renewal).toContainText("Última verificação aprovada");
+  await expect(renewal).toContainText("Verificação em andamento");
+  await expect(renewal).not.toContainText("Nova tentativa automática programada");
   let current = {
     ...ready,
     can_publish: false,
@@ -207,7 +207,7 @@ test("renovação automática mantém publicação válida e recupera expiraçã
   await page.route(diagnosticPath, (route) => route.fulfill({ json: current }));
   await page.clock.runFor(4001);
   await expect(
-    overview.getByText("Publicação liberada", { exact: true }),
+    overview.getByText("Liberada", { exact: true }),
   ).toHaveCount(0);
   await expect(renewal).not.toContainText("enquanto ela permanecer válida");
   current = {
@@ -216,7 +216,7 @@ test("renovação automática mantém publicação válida e recupera expiraçã
   };
   await page.clock.runFor(4001);
   await expect(
-    overview.getByText("Publicação liberada", { exact: true }),
+    overview.getByText("Liberada", { exact: true }),
   ).toBeVisible();
   await expect(renewal).toContainText("Verificação automática programada");
   await tab(page, "Verificação");
@@ -225,12 +225,12 @@ test("renovação automática mantém publicação válida e recupera expiraçã
     exact: true,
   });
   await expect(verification).toContainText(
-    "Esta verificação valida a conexão e os perfis.",
+    "Esta verificação cobre conexão e perfis.",
   );
   await expect(verification).toContainText(
-    "o resultado de cada projeto são conferidos na própria publicação.",
+    "Cada projeto mantém suas próprias regras de código, migrations e publicação.",
   );
-  await expect(verification).toContainText("não exige verificações manuais");
+  await expect(verification).toContainText("Verificar publicação");
   expect(posts).toBe(0);
 });
 
@@ -259,12 +259,12 @@ test("renovação expõe próxima tentativa e falha sem anunciar publicação li
     name: "Visão geral",
     exact: true,
   });
-  await expect(overview).toContainText("Aguardando nova tentativa automática");
-  await expect(overview).toContainText("Próxima tentativa");
+  await expect(overview).toContainText("Nova tentativa automática programada");
+  await expect(overview).toContainText("29/10/2026");
   await expect(overview).toContainText("CONFIGURATION_INVALID");
-  await expect(overview).toContainText("Tentativas sem sucesso: 2");
+  await expect(overview).toContainText("2 falhas consecutivas");
   await expect(
-    overview.getByText("Publicação liberada", { exact: true }),
+    overview.getByText("Liberada", { exact: true }),
   ).toHaveCount(0);
   await tab(page, "Verificação");
   const panel = page.getByRole("tabpanel", {
@@ -272,11 +272,11 @@ test("renovação expõe próxima tentativa e falha sem anunciar publicação li
     exact: true,
   });
   await expect(panel).toContainText(
-    "A publicação aguarda a verificação automática.",
+    "A publicação depende da conclusão dos checks operacionais aplicáveis.",
   );
   await expect(panel).toContainText("Token inválido ou sem permissão.");
   await expect(panel).toContainText(
-    "Use esta ação para antecipar uma conferência.",
+    "Verificar publicação",
   );
   for (const width of [320, 375, 768, 1024, 1440]) {
     await page.setViewportSize({ width, height: 960 });
@@ -311,8 +311,8 @@ test("conexão desativada apresenta renovação pausada sem promessa de retentat
     name: "Visão geral",
     exact: true,
   });
-  await expect(overview).toContainText("Verificação automática desativada");
-  await expect(overview).toContainText("Publicação bloqueada");
+  await expect(overview).toContainText("Conexão inativa");
+  await expect(overview).toContainText("Bloqueada");
   await expect(overview).not.toContainText("Próxima tentativa");
   await expect(overview).not.toContainText("Próxima verificação");
 });
@@ -441,7 +441,7 @@ test("verificação mantém contrato, impede duplo envio e acompanha conclusão 
   await expect(
     page
       .getByRole("tabpanel", { name: "Visão geral", exact: true })
-      .getByText("Verificação concluída", { exact: true }),
+      .getByText("Concluída", { exact: true }),
   ).toBeVisible();
   expect(requests).toHaveLength(1);
 });
@@ -517,7 +517,7 @@ test("erro de diagnóstico remove prontidão obsoleta, preserva motivo e permite
     }),
   );
   await page
-    .getByRole("button", { name: "Atualizar diagnóstico", exact: true })
+    .getByRole("button", { name: "Atualizar estado", exact: true })
     .click();
   await expect(page.getByRole("alert")).toContainText(
     "Diagnóstico temporariamente indisponível",
@@ -530,12 +530,12 @@ test("erro de diagnóstico remove prontidão obsoleta, preserva motivo e permite
   ).toHaveValue("Conferência operacional da publicação");
   await tab(page, "Visão geral");
   await expect(
-    page.getByText("Consulta indisponível", { exact: true }),
+    page.getByText("Não foi possível confirmar", { exact: true }),
   ).toBeVisible();
   await expect(
     page
       .getByRole("tabpanel", { name: "Visão geral", exact: true })
-      .getByText("Publicação liberada", { exact: true }),
+      .getByText("Liberada", { exact: true }),
   ).toBeHidden();
   await page.unroute(diagnosticPath);
   await page.route(diagnosticPath, (route) => route.fulfill({ json: ready }));
@@ -545,7 +545,7 @@ test("erro de diagnóstico remove prontidão obsoleta, preserva motivo e permite
   await expect(
     page
       .getByRole("tabpanel", { name: "Visão geral", exact: true })
-      .getByText("Publicação liberada", { exact: true }),
+      .getByText("Liberada", { exact: true }),
   ).toBeVisible();
   await tab(page, "Verificação");
   await expect(
@@ -684,7 +684,7 @@ test("consulta com timeout desabilita a verificação, recupera automaticamente 
     .getByLabel("Motivo da verificação", { exact: true })
     .fill("Verificação após demora na comunicação");
   await page
-    .getByRole("button", { name: "Atualizar diagnóstico", exact: true })
+    .getByRole("button", { name: "Atualizar estado", exact: true })
     .click();
   await expect.poll(() => polls).toBe(1);
   await page.clock.runFor(12001);
@@ -744,10 +744,10 @@ test("aprovação parcial informa limites e verificação em andamento tem prior
     exact: true,
   });
   await expect(
-    overview.getByText("Publicação parcialmente liberada", { exact: true }),
+    overview.getByText("Parcialmente liberada", { exact: true }),
   ).toBeVisible();
   await expect(
-    overview.getByText("Verificação concluída com aprovação parcial", {
+    overview.getByText("Concluída com aprovação parcial", {
       exact: true,
     }),
   ).toBeVisible();

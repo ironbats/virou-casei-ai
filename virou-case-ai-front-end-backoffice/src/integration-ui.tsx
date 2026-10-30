@@ -38,12 +38,16 @@ export function IntegrationDialog({
   close,
   dirty = false,
   busy = false,
+  className = "",
+  focusClose = false,
 }: {
   title: string;
   children: ReactNode;
   close: () => void;
   dirty?: boolean;
   busy?: boolean;
+  className?: string;
+  focusClose?: boolean;
 }) {
   const ref = useRef<HTMLDialogElement>(null);
   const discard = useRef<HTMLDivElement>(null);
@@ -57,7 +61,9 @@ export function IntegrationDialog({
     dialog?.showModal();
     dialog
       ?.querySelector<HTMLElement>(
-        'input:not([type="hidden"]):not(:disabled), select:not(:disabled), textarea:not(:disabled)',
+        focusClose
+          ? 'button[aria-label="Fechar"]'
+          : 'input:not([type="hidden"]):not(:disabled), select:not(:disabled), textarea:not(:disabled)',
       )
       ?.focus();
     return () => {
@@ -80,8 +86,40 @@ export function IntegrationDialog({
   return (
     <dialog
       ref={ref}
-      className="integration-dialog"
+      className={`integration-dialog ${className}`}
       aria-label={title}
+      onKeyDown={(event) => {
+        if (!focusClose || event.key !== "Tab") return;
+        const focusable = Array.from(
+          event.currentTarget.querySelectorAll<HTMLElement>(
+            'button:not(:disabled), input:not(:disabled):not([type="hidden"]), select:not(:disabled), textarea:not(:disabled), a[href], summary, [tabindex]',
+          ),
+        ).filter(
+          (element) =>
+            element.tabIndex >= 0 &&
+            element.getClientRects().length > 0 &&
+            !element.closest("[hidden]") &&
+            getComputedStyle(element).visibility !== "hidden",
+        );
+        if (!focusable.length) {
+          event.preventDefault();
+          event.currentTarget.focus();
+          return;
+        }
+        const active = document.activeElement;
+        const first = focusable[0];
+        const last = focusable[focusable.length - 1];
+        if (
+          event.shiftKey &&
+          (active === first || !focusable.includes(active as HTMLElement))
+        ) {
+          event.preventDefault();
+          last.focus();
+        } else if (!event.shiftKey && active === last) {
+          event.preventDefault();
+          first.focus();
+        }
+      }}
       onCancel={(e) => {
         e.preventDefault();
         requestClose();

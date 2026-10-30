@@ -1,3 +1,13 @@
+export class AdminApiError extends Error {
+  constructor(
+    message: string,
+    readonly status: number,
+  ) {
+    super(message);
+    this.name = "AdminApiError";
+  }
+}
+
 let csrf = "",
   actor = "";
 export const session = (id: string, token: string) => {
@@ -18,11 +28,12 @@ export async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
     const body = await response.json().catch(() => ({}));
     if (response.status === 401)
       window.dispatchEvent(new Event("admin-expired"));
-    throw new Error(
+    throw new AdminApiError(
       (path === "/auth/login" && response.status === 401
         ? "Credenciais inválidas."
         : body.error?.message) ??
         "Falha de comunicação com a API administrativa.",
+      response.status,
     );
   }
   return response.status === 204 ? (undefined as T) : await response.json();

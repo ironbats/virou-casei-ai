@@ -3,6 +3,7 @@ from datetime import datetime, timedelta
 from sqlalchemy import select
 
 from viracase.application.progress import record_progress
+from viracase.application.verification_progress import finish_verification_attempt, queue_verification_attempt
 from viracase.domain.rules import RuleError, aware, utcnow
 from viracase.infrastructure.configuration_lock import configuration_lock
 from viracase.infrastructure.integrations import Integrations
@@ -154,6 +155,7 @@ def schedule_automatic_verification(repo, executor=None):
                     maintenance = row.validation.get("automatic_verification", {})
                     failures = maintenance.get("consecutive_failures", 0) + 1
                     retry_at = now + timedelta(seconds=min(3600, 60 * 2 ** min(failures - 1, 6)))
+                    queue_verification_attempt(active)
                     active.state, active.error_code = "queued", None
                     job.state, job.lease_token, job.available_at = "queued", None, retry_at
                     record_progress(active, "verification_queued")
@@ -285,6 +287,7 @@ def update_automatic_verification(repo, oid, token, *, starting=False, error=Non
                 },
             }
             if error:
+                finish_verification_attempt(operation)
                 operation.state, operation.error_code, job.state = "failed", code, "done"
                 record_progress(operation, "failed")
             emit(

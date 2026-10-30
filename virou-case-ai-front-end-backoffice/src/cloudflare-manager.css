@@ -1,53 +1,186 @@
-.cloudflare-manager {
-  min-width: 0;
-  overflow-wrap: anywhere;
+.integration-dialog.cloudflare-dialog {
+  --cf-text: #112a50;
+  --cf-muted: #4c6180;
+  --cf-line: #cfddf0;
+  --cf-surface: #ffffff;
+  --cf-subtle: #f3f6fb;
+  --cf-info: #154cba;
+  --cf-success: #126138;
+  --cf-success-bg: #e8f7ee;
+  --cf-warning: #855000;
+  --cf-warning-bg: #fff5e0;
+  --cf-danger: #ad1628;
+  --cf-danger-bg: #fff0f1;
+  --cf-running: #124fc4;
+  --cf-running-bg: #edf4ff;
+  --cf-neutral: #516078;
+  --cf-neutral-bg: #f0f3f7;
+  width: min(1120px, calc(100vw - 48px));
+  max-width: none;
+  max-height: calc(100dvh - 32px);
+  padding: 20px 32px 16px;
+  color: var(--cf-text);
+  overflow: hidden;
+  border-radius: 16px;
 }
+.integration-dialog.cloudflare-dialog[open] {
+  display: flex;
+  flex-direction: column;
+}
+.integration-dialog.cloudflare-dialog > .dialog-head {
+  position: static;
+  flex: 0 0 auto;
+  padding: 0;
+  margin: 0 0 4px;
+  border: 0;
+}
+.integration-dialog.cloudflare-dialog > .dialog-head h2 {
+  font-size: 27px;
+  line-height: 1.35;
+  color: var(--cf-text);
+}
+.integration-dialog.cloudflare-dialog > .dialog-head .icon-button {
+  width: 44px;
+  height: 44px;
+  border: 1px solid var(--cf-line);
+  border-radius: 8px;
+  color: var(--cf-text);
+  background: white;
+}
+.integration-dialog.cloudflare-dialog > div:last-child {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
+}
+.integration-dialog.cloudflare-dialog > div[hidden],
 .cloudflare-manager [hidden] {
   display: none !important;
+}
+.cloudflare-manager {
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  overflow-wrap: anywhere;
+  font-size: 15px;
+  line-height: 1.5;
+}
+.integration-dialog.cloudflare-dialog .cloudflare-manager h3 {
+  margin: 0;
+  font-size: 21px;
+  line-height: 1.35;
+  color: var(--cf-text);
+  letter-spacing: -0.025em;
+}
+.integration-dialog.cloudflare-dialog .cloudflare-manager h4 {
+  margin: 0 0 12px;
+  font-size: 15px;
+  line-height: 1.4;
+}
+.integration-dialog.cloudflare-dialog .cloudflare-manager .button {
+  min-height: 44px;
+  padding: 10px 16px;
+  font-size: 14px;
+  border-radius: 8px;
+  flex-shrink: 0;
+  border-color: #8ba6cf;
+  white-space: normal;
+  text-align: center;
+}
+.integration-dialog.cloudflare-dialog .cloudflare-manager .button.primary {
+  color: white;
+  background: var(--cf-text);
+  border-color: var(--cf-text);
+}
+.integration-dialog.cloudflare-dialog .cloudflare-manager .button:disabled {
+  opacity: 0.65;
+}
+.integration-dialog.cloudflare-dialog .cloudflare-manager .field-help {
+  font-size: 15px;
+  color: var(--cf-muted);
+}
+.integration-dialog.cloudflare-dialog :focus-visible {
+  outline: 3px solid #2769d4;
+  outline-offset: 3px;
 }
 .cloudflare-context {
   display: flex;
   flex-wrap: wrap;
-  gap: 8px 12px;
+  gap: 8px 14px;
   align-items: center;
-  color: var(--muted);
-  font-size: 12px;
-  margin: 16px 0 20px;
+  color: var(--cf-muted, var(--muted));
+  font-size: 14px;
+  margin: 8px 0 18px;
+  flex: 0 0 auto;
+}
+.cloudflare-context .integration-badge {
+  font-size: 13px;
+  padding: 5px 10px;
 }
 .cloudflare-context .integration-badge.default {
   margin: 0;
 }
+.cloudflare-context .integration-badge.active {
+  color: #126138;
+  background: #e8f7ee;
+}
+.cloudflare-context .integration-badge.active::before {
+  content: "";
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 100%;
+  background: currentColor;
+  margin-right: 6px;
+}
 .cloudflare-manager-tabs {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(4, minmax(max-content, 1fr));
   gap: 4px;
   padding: 4px;
-  background: var(--pale);
-  border: 1px solid var(--line);
-  border-radius: 12px;
-  margin-bottom: 24px;
+  background: #edf4fe;
+  border: 1px solid var(--cf-line, var(--line));
+  border-radius: 10px;
+  margin-bottom: 20px;
+  overflow-x: auto;
+  scrollbar-width: thin;
+  flex: 0 0 auto;
 }
 .cloudflare-manager-tabs button {
+  min-width: max-content;
+  white-space: nowrap;
   display: flex;
   align-items: center;
   justify-content: center;
-  gap: 7px;
-  min-height: 44px;
-  padding: 10px 8px;
+  gap: 10px;
+  min-height: 46px;
+  padding: 10px;
   background: transparent;
   border: 1px solid transparent;
   border-radius: 8px;
-  color: var(--muted);
-  font-size: 13px;
-  font-weight: 600;
+  color: var(--cf-muted, var(--muted));
+  font-size: 15px;
+  font-weight: 650;
 }
 .cloudflare-manager-tabs button[aria-selected="true"] {
-  color: var(--navy);
-  background: var(--surface);
-  border-color: var(--line);
+  color: var(--cf-text, var(--navy));
+  background: white;
+  border-color: #a8c2eb;
 }
 .cloudflare-manager-tabs svg {
+  width: 21px;
+  height: 21px;
   flex-shrink: 0;
+}
+.cloudflare-panels {
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+  padding: 4px 6px 8px 3px;
 }
 .cloudflare-manager [role="tabpanel"] {
   min-width: 0;
@@ -59,128 +192,554 @@
   gap: 16px;
   margin-bottom: 16px;
 }
-.cloudflare-section-heading .button {
-  flex-shrink: 0;
-  font-size: 12px;
-}
 .cloudflare-section-heading .field-help {
-  margin: 8px 0 0;
+  margin: 4px 0 0;
 }
 .cloudflare-readiness-grid {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 12px;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 14px;
 }
 .cloudflare-readiness-card {
   min-width: 0;
-  padding: 16px;
-  border: 1px solid var(--line);
-  border-radius: 12px;
-  background: var(--surface);
+  padding: 16px 18px;
+  border: 1px solid var(--cf-line, var(--line));
+  border-radius: 10px;
+  background: white;
 }
-.cloudflare-readiness-card > span {
-  display: block;
-  font-size: 12px;
-  color: var(--muted);
-  margin-bottom: 10px;
+.cloudflare-readiness-card h4 {
+  color: var(--cf-muted);
 }
-.cloudflare-readiness-card > strong {
+.cloudflare-readiness-card > div {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+}
+.cloudflare-readiness-card strong {
   display: block;
-  font-size: 17px;
+  font-size: 19px;
+  line-height: 1.35;
+}
+.cloudflare-readiness-card p {
+  font-size: 14px;
+  color: var(--cf-muted);
+  margin: 4px 0 0;
+}
+.cf-state-icon {
+  display: inline-flex;
+  width: 50px;
+  height: 50px;
+  flex: 0 0 50px;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+}
+.cf-success {
+  --cf-state-color: var(--cf-success, #126138);
+  --cf-state-bg: var(--cf-success-bg, #e8f7ee);
+}
+.cf-warning {
+  --cf-state-color: var(--cf-warning, #855000);
+  --cf-state-bg: var(--cf-warning-bg, #fff5e0);
+}
+.cf-danger {
+  --cf-state-color: var(--cf-danger, #ad1628);
+  --cf-state-bg: var(--cf-danger-bg, #fff0f1);
+}
+.cf-running {
+  --cf-state-color: var(--cf-running, #124fc4);
+  --cf-state-bg: var(--cf-running-bg, #edf4ff);
+}
+.cf-neutral {
+  --cf-state-color: var(--cf-neutral, #516078);
+  --cf-state-bg: var(--cf-neutral-bg, #f0f3f7);
+}
+.cf-state-icon,
+.cf-badge {
+  color: var(--cf-state-color);
+  background: var(--cf-state-bg);
+}
+.cf-state-icon.cf-running {
+  border: 5px solid #cee0fc;
+}
+.cf-activity {
+  position: relative;
+}
+.cf-activity::after {
+  content: "";
+  position: absolute;
+  inset: -5px;
+  border: 4px solid transparent;
+  border-top-color: #124fc4;
+  border-right-color: #124fc4;
+  border-radius: 50%;
+  animation: cf-rotate 1.4s linear infinite;
+}
+@keyframes cf-rotate {
+  to {
+    transform: rotate(360deg);
+  }
+}
+.cf-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 100%;
+  padding: 5px 9px;
+  border-radius: 6px;
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1.3;
+}
+.cf-badge svg,
+.cf-footnote svg,
+.cf-callout > svg,
+.cf-inline-notice > svg {
+  flex-shrink: 0;
+}
+.cf-next-panel,
+.cf-verification-banner {
+  display: flex;
+  align-items: center;
+  gap: 20px;
+  padding: 20px;
+  margin: 18px 0;
+  border: 1px solid color-mix(in srgb, var(--cf-state-color) 25%, white);
+  background: color-mix(in srgb, var(--cf-state-bg) 55%, white);
+  border-radius: 10px;
+}
+.cf-next-panel > .cf-state-icon,
+.cf-verification-banner > .cf-state-icon {
+  width: 62px;
+  height: 62px;
+  flex-basis: 62px;
+}
+.cf-next-copy {
+  min-width: 0;
+  flex: 1;
+}
+.cf-next-copy p {
+  margin: 5px 0 0;
+  color: var(--cf-muted);
+  font-size: 14px;
+}
+.cf-meta-line {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px 18px;
+  margin-top: 9px;
+  font-size: 14px;
+}
+.cf-meta-line span {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+.cf-overdue {
+  color: var(--cf-warning) !important;
+  font-weight: 600;
+}
+.cf-overview-columns,
+.cf-verification-columns {
+  display: grid;
+  grid-template-columns: minmax(0, 2fr) minmax(0, 1fr);
+  gap: 16px;
+  margin: 16px 0;
+}
+.cf-verification-columns {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+.cf-card {
+  min-width: 0;
+  padding: 18px 20px;
+  border: 1px solid var(--cf-line, var(--line));
+  border-radius: 10px;
+  background: white;
+}
+.cf-card > h3 {
+  margin-bottom: 16px !important;
+}
+.cf-card p {
+  margin: 8px 0;
+  font-size: 14px;
+  color: var(--cf-muted);
+}
+.cf-inline-notice {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 14px;
+  color: var(--cf-state-color);
+  background: var(--cf-state-bg);
+  border: 1px solid color-mix(in srgb, var(--cf-state-color) 26%, white);
+  border-radius: 8px;
+}
+.cf-inline-notice .cf-state-icon {
+  width: 27px;
+  height: 27px;
+  flex-basis: 27px;
+}
+.cf-inline-notice strong {
+  font-size: 15px;
   line-height: 1.4;
 }
-.cloudflare-readiness-card > p {
-  font-size: 13px;
-  color: var(--muted);
-  margin: 8px 0 0;
-}
-.cloudflare-next-step {
-  display: grid;
-  gap: 16px;
-  padding: 20px;
-  margin: 16px 0;
-  border: 1px solid var(--line);
-  border-radius: 12px;
-  background: var(--pale);
-}
-.cloudflare-next-step p {
-  margin: 8px 0 0;
-  font-size: 13px;
-  color: var(--muted);
-}
-.cloudflare-next-step > .button {
-  justify-self: start;
-}
-.cloudflare-account-summary.integration-summary {
-  margin: 16px 0;
+.cf-text-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 44px;
+  padding: 8px 0;
+  color: var(--cf-info);
   background: transparent;
-  padding: 0;
+  border: 0;
+  font: inherit;
+  text-align: left;
 }
-.cloudflare-account-summary code {
-  font-size: 12px;
+.cf-text-button:hover {
+  text-decoration: underline;
 }
-.cloudflare-scope-note {
+.cf-inline-definition,
+.cf-technical-definition {
+  display: grid;
+  gap: 7px;
+  margin: 12px 0;
+  font-size: 14px;
+}
+.cf-inline-definition > div,
+.cf-technical-definition > div {
+  display: grid;
+  grid-template-columns: minmax(82px, 0.28fr) minmax(0, 1fr);
+  gap: 12px;
+}
+.cf-inline-definition dt,
+.cf-technical-definition dt {
+  color: var(--cf-muted);
+}
+.cf-inline-definition dd,
+.cf-technical-definition dd {
+  min-width: 0;
+  margin: 0;
+}
+.cf-technical-definition > div {
+  grid-template-columns: minmax(120px, 0.5fr) minmax(0, 1fr);
+}
+.cloudflare-manager code {
+  font-size: 13px;
+  overflow-wrap: anywhere;
+  white-space: normal;
+}
+.cf-technical-definition code,
+.cf-inline-definition dd > code {
+  display: inline-block;
+  max-width: 100%;
+  padding: 3px 7px;
+  background: var(--cf-subtle, #f3f6fb);
+  border-radius: 5px;
+}
+.cf-connection-info dl {
+  margin: 12px 0 0;
+}
+.cf-connection-info dl > div {
+  padding: 12px 0;
+  border-bottom: 1px solid var(--cf-line);
+}
+.cf-connection-info dl > div:last-child {
+  border-bottom: 0;
+  padding-bottom: 0;
+}
+.cf-connection-info dt {
+  font-size: 13px;
+  color: var(--cf-muted);
+}
+.cf-connection-info dd {
   display: flex;
-  gap: 8px;
   align-items: flex-start;
-  border-top: 1px solid var(--line);
-  padding-top: 16px;
-  margin-bottom: 0;
+  gap: 9px;
+  margin: 6px 0 0;
+  font-size: 14px;
 }
-.cloudflare-scope-note svg {
+.cf-connection-info dd svg {
+  color: var(--cf-muted);
   flex-shrink: 0;
   margin-top: 2px;
+}
+.cf-footnote,
+.cf-callout {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 12px 16px;
+  margin-top: 14px;
+  border: 1px solid #cbdcff;
+  border-radius: 8px;
+  color: #154cba;
+  background: #edf4ff;
+  font-size: 14px;
+}
+.cf-footnote p,
+.cf-callout p {
+  margin: 0;
+}
+.cf-callout {
+  margin: 0 0 16px;
+  color: var(--cf-state-color);
+  background: var(--cf-state-bg);
+  border-color: color-mix(in srgb, var(--cf-state-color) 25%, white);
+}
+.cf-callout p {
+  margin-top: 5px;
+}
+.integration-dialog.cloudflare-dialog .cf-details {
+  padding: 0;
+  margin: 10px 0 0;
+  border: 1px solid var(--cf-line, var(--line));
+  background: var(--cf-subtle, #f3f6fb);
+  border-radius: 8px;
+}
+.integration-dialog.cloudflare-dialog .cf-details > summary {
+  min-height: 44px;
+  padding: 11px 14px;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.cf-details > :not(summary) {
+  margin-left: 14px;
+  margin-right: 14px;
+}
+.cf-details > :last-child {
+  margin-bottom: 14px;
+}
+.cf-details[open] > summary {
+  margin-bottom: 8px;
+}
+.cf-banner-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 14px;
+  padding-left: 20px;
+  border-left: 1px solid var(--cf-line);
+  max-width: 35%;
+}
+.cf-banner-actions > span {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 14px;
+}
+.cf-timeline {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.cf-step {
+  position: relative;
+  display: grid;
+  grid-template-columns: 30px minmax(0, 1fr);
+  gap: 12px;
+  padding: 0 0 22px;
+}
+.cf-step:not(:last-child)::after {
+  content: "";
+  position: absolute;
+  top: 31px;
+  bottom: 2px;
+  left: 14px;
+  width: 2px;
+  background: #c8d1df;
+}
+.cf-step.cf-success:not(:last-child)::after {
+  background: #187548;
+}
+.cf-step:last-child {
+  padding-bottom: 6px;
+}
+.cf-step-icon {
+  display: flex;
+  width: 30px;
+  height: 30px;
+  align-items: center;
+  justify-content: center;
+  color: var(--cf-state-color);
+  background: var(--cf-state-bg);
+  border: 1px solid currentColor;
+  border-radius: 50%;
+}
+.cf-step.cf-success .cf-step-icon {
+  color: white;
+  background: #147748;
+  border-color: #147748;
+}
+.cf-step-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 8px;
+  min-height: 30px;
+}
+.cf-step-heading strong {
+  min-width: 0;
+  font-size: 14px;
+}
+.cf-step p {
+  margin: 4px 0 0;
+  font-size: 13px;
+}
+.cf-step-time {
+  font-size: 12px !important;
+}
+.cf-inline-help {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  margin-top: 16px;
+  color: var(--cf-info);
+}
+.cf-inline-help svg {
+  flex-shrink: 0;
+  margin-top: 2px;
+}
+.cf-inline-help p {
+  margin: 0;
+  color: var(--cf-muted);
+}
+.cf-run-identity {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 12px;
+  font-size: 13px;
+  color: var(--cf-muted);
+  margin: 8px 0;
+}
+.cf-context-note,
+.cf-empty {
+  color: var(--cf-muted, var(--muted));
+  font-size: 14px;
+  line-height: 1.55;
+}
+.cf-context-note {
+  margin: 10px 0;
+}
+.cf-history-count {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin-top: 16px;
+  padding-top: 12px;
+  border-top: 1px solid var(--cf-line);
+  font-size: 14px;
+  color: var(--cf-muted);
+}
+.cf-history-count svg {
+  flex-shrink: 0;
+}
+.cf-profile-section {
+  padding: 14px 16px;
+}
+.cf-profile-table {
+  width: 100%;
+  border-collapse: separate;
+  border-spacing: 0;
+  margin: 12px 0 8px;
+  border: 1px solid var(--cf-line);
+  border-radius: 6px;
+  overflow: hidden;
+  font-size: 14px;
+  table-layout: fixed;
+}
+.cf-profile-table th,
+.cf-profile-table td {
+  text-align: left;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--cf-line);
+  border-right: 1px solid var(--cf-line);
+  vertical-align: middle;
+  min-width: 0;
+}
+.cf-profile-table thead th {
+  font-weight: 500;
+  background: var(--cf-subtle);
+}
+.cf-profile-table tr > :first-child {
+  width: 40%;
+}
+.cf-profile-table tr:last-child > * {
+  border-bottom: 0;
+}
+.cf-profile-table tr > :last-child {
+  border-right: 0;
+}
+.cf-profile-results,
+.cf-probes,
+.cf-resources,
+.cf-events {
+  display: grid;
+  gap: 12px;
+  padding: 0;
+  list-style: none;
+}
+.cf-profile-results > li,
+.cf-probes > li,
+.cf-resources > li,
+.cf-events > li {
+  padding: 12px;
+  background: white;
+  border: 1px solid var(--cf-line, var(--line));
+  border-radius: 8px;
+  min-width: 0;
+}
+.cf-events code {
+  margin-right: 12px;
+}
+.cf-run-technical {
+  padding-top: 12px;
+}
+.cf-run-technical + .cf-run-technical {
+  border-top: 1px solid var(--cf-line);
+  margin-top: 16px;
+}
+.cf-run-technical h4 {
+  font-size: 16px !important;
+  margin-top: 16px !important;
+}
+.cf-profile-blocks {
+  margin-top: 16px;
+}
+.cf-sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+.cf-skeleton {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+}
+.cf-skeleton span {
+  height: 100px;
+  border-radius: 10px;
+  background: #f0f3f7;
+  border: 1px solid var(--cf-line);
+}
+.cf-skeleton p {
+  grid-column: 1 / -1;
+  color: var(--cf-muted);
 }
 .cloudflare-manager .publication-diagnostics {
   border: 0;
   padding: 0;
   margin: 0;
-}
-.cloudflare-profiles {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 12px;
-  list-style: none;
-  padding: 0 !important;
-  margin: 16px 0;
-}
-.cloudflare-profiles > li {
-  min-width: 0;
-  border: 1px solid var(--line);
-  border-radius: 10px;
-  padding: 14px;
-  font-size: 13px;
-}
-.cloudflare-profiles > li > strong {
-  display: block;
-  margin-top: 8px;
-}
-.cloudflare-profiles p {
-  margin: 8px 0 0;
-}
-.cloudflare-success {
-  color: var(--success);
-}
-.cloudflare-verification-result {
-  border-top: 1px solid var(--line);
-  padding-top: 16px;
-}
-.cloudflare-automatic-verification {
-  min-width: 0;
-  margin: 16px 0;
-  padding: 16px;
-  border: 1px solid var(--line);
-  border-radius: 12px;
-  background: var(--surface);
-  overflow-wrap: anywhere;
-}
-.cloudflare-automatic-verification p {
-  margin: 8px 0 0;
-  font-size: 13px;
-}
-.cloudflare-automatic-verification .integration-summary {
-  margin: 12px 0 0;
-  padding: 12px;
 }
 .cloudflare-verification-form {
   border-top: 1px solid var(--line);
@@ -190,15 +749,23 @@
 .cloudflare-verification-form .field-help {
   margin: 8px 0 12px;
   color: var(--muted);
-  font-size: 12px;
 }
 .cloudflare-verification-form label {
+  display: grid;
+  gap: 6px;
   margin-top: 12px;
-  font-size: 13px;
+  font-size: 14px;
 }
 .cloudflare-technical {
   border-top: 1px solid var(--line);
   margin-top: 20px;
+}
+.cloudflare-manager pre {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  overflow: visible;
+  max-height: none;
+  font-size: 13px;
 }
 .cloudflare-manager .cloudflare-qualification {
   gap: 12px;
@@ -209,29 +776,213 @@
 }
 .cloudflare-qualification textarea {
   font:
-    12px/1.6 ui-monospace,
+    13px/1.6 ui-monospace,
     SFMono-Regular,
     Consolas,
     monospace;
 }
-@media (max-width: 600px) {
-  .cloudflare-manager-tabs {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-    margin-bottom: 20px;
+@media (max-width: 900px) {
+  .integration-dialog.cloudflare-dialog {
+    padding: 18px 20px 12px;
   }
-  .cloudflare-readiness-grid,
-  .cloudflare-profiles {
+  .cf-next-panel {
+    flex-wrap: wrap;
+    gap: 14px;
+  }
+  .cf-next-panel > .button {
+    margin-left: 76px;
+  }
+  .cf-overview-columns {
     grid-template-columns: minmax(0, 1fr);
+  }
+  .cf-connection-info dl {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 8px 20px;
+  }
+  .cf-verification-columns {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .cf-verification-banner {
+    flex-wrap: wrap;
+  }
+  .cf-banner-actions {
+    padding-left: 0;
+    border-left: 0;
+    max-width: none;
+    width: 100%;
+    justify-content: space-between;
+  }
+  .cloudflare-readiness-card {
+    padding: 14px;
+  }
+  .cloudflare-readiness-card > div {
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+  .cloudflare-readiness-card strong {
+    font-size: 17px;
+  }
+}
+@media (max-width: 600px) {
+  .integration-dialog.cloudflare-dialog {
+    width: calc(100vw - 12px);
+    max-height: calc(100dvh - 12px);
+    padding: 14px 12px 8px;
+    border-radius: 12px;
+  }
+  .integration-dialog.cloudflare-dialog > .dialog-head {
+    gap: 10px;
+  }
+  .integration-dialog.cloudflare-dialog > .dialog-head h2 {
+    font-size: 22px;
+  }
+  .cloudflare-context {
+    margin-bottom: 12px;
+    font-size: 13px;
+    gap: 6px 10px;
+  }
+  .cloudflare-manager-tabs {
+    margin-bottom: 14px;
+  }
+  .cloudflare-readiness-grid {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 10px;
+  }
+  .cloudflare-readiness-card {
+    padding: 13px 15px;
+  }
+  .cloudflare-readiness-card h4 {
+    margin-bottom: 7px !important;
+  }
+  .cloudflare-readiness-card > div {
+    flex-wrap: nowrap;
   }
   .cloudflare-section-heading {
     flex-direction: column;
+    gap: 10px;
   }
-  .cloudflare-next-step {
+  .cloudflare-section-heading .cf-refresh {
+    align-self: flex-end;
+  }
+  .cf-next-panel,
+  .cf-verification-banner {
     padding: 16px;
+    gap: 12px;
   }
-  .cloudflare-next-step > .button,
-  .cloudflare-manager .actions > .button {
-    justify-self: stretch;
+  .cf-next-panel > .cf-state-icon,
+  .cf-verification-banner > .cf-state-icon {
+    width: 42px;
+    height: 42px;
+    flex-basis: 42px;
+  }
+  .cf-next-panel > .button {
+    margin-left: 0;
     width: 100%;
   }
+  .cf-card {
+    padding: 16px;
+  }
+  .cf-connection-info dl {
+    display: block;
+  }
+  .cf-technical-definition > div,
+  .cf-inline-definition > div {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 2px;
+  }
+  .cf-technical-definition {
+    gap: 12px;
+  }
+  .cf-profile-table {
+    display: block;
+    border: 0;
+    border-radius: 0;
+  }
+  .cf-profile-table thead {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+  }
+  .cf-profile-table tbody {
+    display: grid;
+    gap: 10px;
+  }
+  .cf-profile-table tr {
+    display: block;
+    border: 1px solid var(--cf-line);
+    border-radius: 8px;
+    overflow: hidden;
+  }
+  .cf-profile-table tr > :first-child {
+    display: block;
+    width: auto;
+    background: var(--cf-subtle);
+  }
+  .cf-profile-table td {
+    display: grid;
+    grid-template-columns: minmax(90px, 0.75fr) minmax(0, 1fr);
+    gap: 8px;
+    align-items: center;
+  }
+  .cf-profile-table td::before {
+    content: attr(data-label);
+    font-size: 13px;
+    color: var(--cf-muted);
+  }
+  .cf-profile-table th,
+  .cf-profile-table td {
+    border: 0;
+    padding: 10px;
+  }
+  .cf-banner-actions {
+    align-items: flex-start;
+  }
+  .cf-step-heading {
+    align-items: flex-start;
+  }
+  .cf-footnote {
+    padding: 12px;
+  }
+  .cloudflare-manager .actions > .button {
+    width: 100%;
+  }
+  .cf-skeleton {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .integration-dialog.cloudflare-dialog *,
+  .integration-dialog.cloudflare-dialog *::before,
+  .integration-dialog.cloudflare-dialog *::after {
+    animation: none !important;
+    transition: none !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+.cf-phase-details {
+  margin-top: 6px;
+  padding: 0 !important;
+}
+.cf-phase-details > summary {
+  min-height: 44px;
+  padding: 9px 0 !important;
+  font-size: 13px;
+  color: var(--cf-info);
+}
+.cf-phase-details ul {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+}
+.cf-phase-details li {
+  border-top: 1px solid var(--cf-line);
+  padding: 10px 0;
+}
+
+.cf-refresh {
+  min-width: 162px;
 }
