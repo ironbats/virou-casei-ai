@@ -1,0 +1,61 @@
+services:
+  verifier-ipc-init:
+    image: viroucaseai-backend:2.0.0.34
+    user: "0:0"
+    init: false
+    restart: "no"
+    network_mode: none
+    read_only: true
+    cap_drop:
+      - ALL
+    cap_add:
+      - CHOWN
+      - FOWNER
+    security_opt:
+      - no-new-privileges:true
+    environment:
+      VIRA_RUNTIME_UID: ${VIRA_RUNTIME_UID:-10001}
+      VIRA_RUNTIME_GID: ${VIRA_RUNTIME_GID:-10001}
+    command: ["python", "-m", "viracase.infrastructure.publication_http_relay", "init"]
+    volumes:
+      - verification-ipc:/run/viracase-verifier
+    healthcheck:
+      disable: true
+  verifier-egress:
+    image: viroucaseai-backend:2.0.0.34
+    user: "${VIRA_RUNTIME_UID:-10001}:${VIRA_RUNTIME_GID:-10001}"
+    init: true
+    restart: unless-stopped
+    network_mode: host
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=32m,mode=1777
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    command: ["python", "-m", "viracase.infrastructure.publication_http_relay", "run"]
+    volumes:
+      - verification-ipc:/run/viracase-verifier
+      - type: bind
+        source: /etc/ssl/certs/ca-certificates.crt
+        target: /etc/ssl/certs/ca-certificates.crt
+        read_only: true
+        bind:
+          create_host_path: false
+    depends_on:
+      verifier-ipc-init:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD", "python", "-m", "viracase.infrastructure.publication_http_relay", "health"]
+      interval: 5s
+      timeout: 3s
+      retries: 15
+      start_period: 5s
+  worker:
+    environment:
+      VIRA_REMOTE_VERIFIER_SOCKET: /run/viracase-verifier/http.sock
+    volumes:
+      - verification-ipc:/run/viracase-verifier:ro
+volumes:
+  verification-ipc:

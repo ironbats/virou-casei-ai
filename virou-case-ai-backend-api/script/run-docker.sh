@@ -8,8 +8,10 @@ if [[ ! -f .env ]]; then
   exit 1
 fi
 source script/publication-runtime.sh
+source script/publication-verifier-egress.sh
 publication_prepare_compose
 publication_preserve_runtime_user
+publication_enable_verifier_egress
 mkdir -p var/sources var/secrets
 publication_compose config --quiet
 publication_build_images
@@ -37,6 +39,9 @@ else
   echo 'DOCKER_STARTUP_FAILED: o build concluiu, mas a inicializacao ou a verificacao de saude falhou.' >&2
   printf 'Diagnostico dos inicializadores desde %s (ate 120 linhas por servico):\n' "$startup_started_at" >&2
   publication_compose logs --no-color --timestamps --since "$startup_started_at" --tail=120 initialize storage-init || true
+  if [[ "${PUBLICATION_VERIFIER_ENABLED:-0}" == 1 ]]; then
+    publication_compose logs --no-color --timestamps --since "$startup_started_at" --tail=120 verifier-egress verifier-ipc-init || true
+  fi
   echo 'Inicializacao incompleta. Consulte os logs de initialize, storage-init, public-api, admin-api e worker.' >&2
   exit "$startup_status"
 fi

@@ -8,6 +8,7 @@ from uuid import uuid4
 
 import httpx
 
+from viracase.infrastructure.publication_http_relay import configured_transport
 from viracase.domain.rules import RuleError, utcnow
 from viracase.infrastructure.publication_build_diagnostics import BuildFailure
 from viracase.infrastructure.publication_d1_diagnostics import sanitize_provider_diagnostic
@@ -112,7 +113,10 @@ class RemoteVerifier:
         started = self.clock()
         deadline = started + self.budget
         report = {"passed": False, "budget_seconds": self.budget, "attempts": []}
-        with httpx.Client(transport=self.transport, follow_redirects=False, timeout=self.timeout) as client:
+        with httpx.Client(
+            transport=self.transport if self.transport is not None else configured_transport(),
+            follow_redirects=False, timeout=self.timeout,
+        ) as client:
             for attempt in range(1, self.max_attempts + 1):
                 checks = []
                 for name, path in PROBES:
