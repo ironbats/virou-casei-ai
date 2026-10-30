@@ -1,9 +1,9 @@
 import { useEffect, useState, type FormEvent } from "react";
 import { ArrowRight, FileCode2, Lightbulb, Plus, Trash2 } from "lucide-react";
 import { Link, useNavigate } from "react-router-dom";
-import { api, command } from "../shared/api";
+import { api, ApiError, command } from "../shared/api";
 import { ErrorNotice, Loading, Modal, useLoad } from "../shared/ui";
-import type { Page, Project } from "../shared/types";
+import type { Operation, Page, Project } from "../shared/types";
 
 type ProjectsResult = Page<Project> & {
   quota: { max_projects: number; used_projects: number; can_create: boolean };
@@ -19,11 +19,30 @@ export function Projects() {
   const [deleting, setDeleting] = useState<Project | null>(null);
   const [confirmation, setConfirmation] = useState("");
   const [notice, setNotice] = useState("");
+  const [deletionProgress, setDeletionProgress] = useState<Record<string, Operation>>({});
+  const deletingProjects = data?.items.filter((p) => p.state === "deleting") ?? [];
+  const deletingProjectIds = deletingProjects.map((p) => p.id).join(",");
   useEffect(() => {
-    if (!data?.items.some((p) => p.state === "deleting")) return;
-    const timer = window.setInterval(reload, 3000);
-    return () => window.clearInterval(timer);
-  }, [data?.items.some((p) => p.state === "deleting")]);
+    if (!deletingProjectIds) return;
+    const projectIds = deletingProjectIds.split(",");
+    let alive = true;
+    async function refreshProgress() {
+      const results = await Promise.all(projectIds.map(async (id) => {
+        try {
+          const page = await api<Page<Operation>>(`/operations?project_id=${encodeURIComponent(id)}&kind=project_deletion&latest=true`);
+          return [id, page.items[0]] as const;
+        } catch {
+          return [id, undefined] as const;
+        }
+      }));
+      if (alive) {
+        setDeletionProgress(Object.fromEntries(results.filter((result) => !!result[1])) as Record<string, Operation>);
+      }
+    }
+    void refreshProgress();
+    const timer = window.setInterval(() => { reload(); void refreshProgress(); }, 3000);
+    return () => { alive = false; window.clearInterval(timer); };
+  }, [deletingProjectIds]);
   async function remove(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!deleting || busy || confirmation !== deleting.name) return;
@@ -33,10 +52,16 @@ export function Projects() {
       await command(`/projects/${deleting.id}`, { confirmation }, "DELETE", deleting.version);
       setDeleting(null);
       setConfirmation("");
-      setNotice("Exclusão solicitada. A vaga será liberada após a remoção dos arquivos e recursos publicados.");
+      setNotice("Exclusão recebida. Novas operações foram bloqueadas e os recursos serão removidos após o encerramento seguro das atividades anteriores.");
       reload();
     } catch (e) {
-      setFormError(e);
+      if (e instanceof ApiError && e.code === "VERSION_CONFLICT") {
+        setDeleting(null);
+        setNotice("O projeto mudou antes da confirmação. A lista foi atualizada; confira o estado antes de solicitar novamente.");
+        reload();
+      } else {
+        setFormError(e);
+      }
     } finally {
       setBusy(false);
     }
@@ -115,7 +140,17 @@ export function Projects() {
                   >
                     Continuar projeto <ArrowRight size={18} />
                   </Link>}
-                  {p.state === "deleting" && <p className="small" role="status">A exclusão está pendente. Se houve falha, retome a remoção abaixo. O histórico de consumo será preservado.</p>}
+                  {p.state === "deleting" && (
+                    <div className="small" role="status">
+                      <p>{deletionProgress[p.id]?.progress_message ?? "A exclusão está em processamento. O histórico de consumo será preservado."}</p>
+                      {deletionProgress[p.id]?.state === "failed" && (
+                        <p>A limpeza não foi concluída. Use “Retomar exclusão” para tentar novamente sem recriar recursos.</p>
+                      )}
+                      {deletionProgress[p.id]?.progress_stage === "deletion_waiting_operations" && (
+                        <p>Existem atividades anteriores aguardando conclusão ou reconciliação segura. Nenhum arquivo será apagado antes disso.</p>
+                      )}
+                    </div>
+                  )}
                   <button className="button danger full project-delete" onClick={() => {
                     setDeleting(p); setConfirmation(""); setFormError(null);
                   }} aria-label={`${p.state === "deleting" ? "Retomar exclusão de" : "Excluir projeto"} ${p.name}`}>

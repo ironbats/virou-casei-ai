@@ -6,6 +6,7 @@ for executable in python3 docker; do
 done
 docker compose version >/dev/null
 python3 -c 'import sys; assert sys.version_info >= (3,12), "Python 3.12 ou superior é necessário"'
+export VIRA_SOURCE_ROOT="$(python3 script/source-storage.py --root .)"
 python3 script/bootstrap-env.py
 docker compose up -d --wait --wait-timeout 120 postgres
 echo "✅ PostgreSQL disponível em Docker; volumes preservados."

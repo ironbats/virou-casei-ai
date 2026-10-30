@@ -82,14 +82,29 @@ def test_deletion_is_owned_versioned_idempotent_and_releases_quota_only_after_cl
 
 
 @pytest.mark.parametrize("state", ["queued", "running", "reconciling"])
-def test_inflight_operations_prevent_delete(system, state):
+def test_inflight_operations_are_quiesced_without_rejecting_deletion(system, state):
     repo, actor, p = system["repo"], system["users"][0], project(system)
     with repo.sessions.begin() as db:
-        db.add(Operation(account_id=actor, project_id=p["id"], type="generation", state=state))
-    with pytest.raises(RuleError) as caught:
-        request_deletion(repo, actor, p["id"], "delete", p["version"], p["name"])
-    assert caught.value.code == "OPERATION_CONFLICT"
-    assert repo.project(actor, p["id"])["state"] == "draft"
+        previous = Operation(account_id=actor, project_id=p["id"], type="generation", state=state)
+        db.add(previous)
+        db.flush()
+        previous_id = previous.id
+    result = request_deletion(repo, actor, p["id"], "delete", p["version"], p["name"])
+    assert result["state"] == "queued"
+    with repo.sessions() as db:
+        previous = db.get(Operation, previous_id)
+        assert previous.cancel_requested
+        assert previous.state == ("cancelled" if state == "queued" else state)
+        assert db.get(Project, p["id"]).state == "deleting"
+    if state == "queued":
+        Worker(repo, None, None).tick(result["id"])
+        assert repo.operation(actor, result["id"])["state"] == "succeeded"
+    else:
+        Worker(repo, None, None).tick(result["id"])
+        assert repo.operation(actor, result["id"])["progress_stage"] == "deletion_waiting_operations"
+        assert repo.operation(actor, result["id"])["state"] == "queued"
+        with repo.sessions() as db:
+            assert db.get(Project, p["id"]).state == "deleting"
 
 
 def test_failed_local_cleanup_can_resume_without_releasing_quota(system, monkeypatch):

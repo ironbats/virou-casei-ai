@@ -98,6 +98,8 @@ export function ProjectWorkspace() {
   const [project, setProject] = useState<Project | null>(null),
     [caps, setCaps] = useState<Capabilities | null>(null),
     [baseFiles, setBaseFiles] = useState<Record<string, string> | null>(null),
+    [sourceError, setSourceError] = useState<unknown>(null),
+    [sourceRetry, setSourceRetry] = useState(0),
     [selected, setSelected] = useState("public/index.html"),
     [tab, setTab] = useState("code"),
     [mobile, setMobile] = useState("code"),
@@ -391,18 +393,23 @@ export function ProjectWorkspace() {
   useEffect(() => {
     if (!draft.data) return;
     let alive = true;
+    setSourceError(null);
+    setBaseFiles(null);
     revisionFiles(pid, draft.data.base_revision_id)
-      .then((f) => {
+      .then((files) => {
         if (alive) {
-          setBaseFiles(f);
-          setSelected((s) => (s in f ? s : (Object.keys(f)[0] ?? "")));
+          setBaseFiles(files);
+          setSourceError(null);
+          setSelected((current) => current in files ? current : (Object.keys(files)[0] ?? ""));
         }
       })
-      .catch(setError);
+      .catch((failure) => {
+        if (alive) setSourceError(failure);
+      });
     return () => {
       alive = false;
     };
-  }, [pid, draft.data?.base_revision_id]);
+  }, [pid, draft.data?.base_revision_id, sourceRetry]);
   const transferFocused = useRef(false);
   useEffect(() => {
     if (
@@ -806,13 +813,44 @@ export function ProjectWorkspace() {
   const downloads = tracking.items.filter(
     (o) => o.type === "export" && o.state === "succeeded",
   );
-  if (!project || !caps || !draft.data || !baseFiles)
+  if (!project || !caps || !draft.data)
     return (
       <>
         <ErrorNotice error={error || draft.error} />
         <MigrationFailureNotice error={error || draft.error} />
         {!error && !draft.error && <Loading />}
       </>
+    );
+  if (!baseFiles)
+    return (
+      <div className="project-workspace">
+        <WorkspaceTopbar>
+          <div className="workspace-heading">
+            <div className="workspace-identity">
+              <Link className="back-link" to="/app/projetos">Meus projetos</Link>
+              <span className="muted"> / </span>
+              <h1 title={project.name}>{project.name}</h1>
+            </div>
+          </div>
+        </WorkspaceTopbar>
+        <main className="workspace-source-fallback">
+          {sourceError ? (
+            <section className="workspace-source-fallback-card" role="status">
+              <h2>Projeto disponível, mas os arquivos da revisão não carregaram</h2>
+              <p>O cadastro e o histórico do projeto continuam disponíveis. A edição e a publicação estão bloqueadas até que os arquivos sejam recuperados com integridade.</p>
+              <ErrorNotice error={sourceError} />
+              {sourceError instanceof ApiError && sourceError.requestId && (
+                <p className="small muted">Identificação do erro: {sourceError.requestId}</p>
+              )}
+              <div className="actions">
+                <button className="button primary" onClick={() => setSourceRetry((attempt) => attempt + 1)}>Tentar carregar novamente</button>
+                <Link className="button" to={`/app/projetos/${pid}/historico`}>Histórico de revisões</Link>
+                <Link className="button" to="/app/projetos">Voltar aos projetos</Link>
+              </div>
+            </section>
+          ) : <Loading />}
+        </main>
+      </div>
     );
   const blocked = busy || !canWrite || !!draft.conflict;
   const analysisBlocked =

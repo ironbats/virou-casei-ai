@@ -12,6 +12,8 @@ STAGES = {
     "preparation_failed": "Não foi possível concluir a preparação dos campos.",
     "preparation_cancelled": "Preparação cancelada. Os campos foram preservados.",
     "deletion_queued": "Exclusão solicitada. Aguardando o executor.",
+    "deletion_waiting_operations": "Exclusão recebida. Aguardando encerramento seguro de operações anteriores.",
+    "cancelled_before_deletion": "Operação pendente cancelada para permitir a exclusão do projeto.",
     "deletion_remote": "Removendo a publicação e o banco do projeto.",
     "deletion_sources": "Removendo arquivos e rascunhos do projeto.",
     "deletion_complete": "Projeto excluído. A vaga foi liberada.",

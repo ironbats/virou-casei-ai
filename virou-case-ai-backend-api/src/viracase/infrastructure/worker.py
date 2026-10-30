@@ -133,6 +133,13 @@ class Worker:
                 return False
             oid, token = job.operation_id, new_id()
             operation = db.get(Operation, oid)
+            if operation.project_id and operation.type != "project_deletion":
+                project = db.get(Project, operation.project_id)
+                if project and project.state in {"deleting", "deleted"}:
+                    from viracase.infrastructure.project_deletion import quiesce_operations
+
+                    quiesce_operations(self.repo, db, project.id)
+                    return True
             request_timeout = self.repo.config.provider_timeout
             if operation.type in {"generation", "template_preparation", "code_analysis"}:
                 request_timeout, _ = execution_timeouts(operation.policy, request_timeout)

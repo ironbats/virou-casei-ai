@@ -10,9 +10,11 @@ fi
 source script/publication-runtime.sh
 source script/publication-verifier-egress.sh
 publication_prepare_compose
+source_container="$(publication_compose ps -aq worker | head -n 1)"
+export VIRA_SOURCE_ROOT="$(python3 script/source-storage.py --worker-container "$source_container" --root .)"
 publication_preserve_runtime_user
 publication_enable_verifier_egress
-mkdir -p var/sources var/secrets
+mkdir -p var/secrets
 publication_compose config --quiet
 publication_build_images
 startup_started_at="$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
@@ -48,6 +50,11 @@ fi
 if ! publication_compose run --rm --no-deps initialize python script/bootstrap-admin.py --check; then
   echo 'Falha na verificacao das credenciais administrativas. Consulte os logs de initialize.' >&2
   exit 1
+fi
+if publication_compose exec -T public-api python script/check-source-integrity.py; then
+  printf '%s\n' 'SOURCE_STORAGE_AUDIT_OK: revisoes acessiveis e integras.'
+else
+  printf '%s\n' 'SOURCE_STORAGE_AUDIT_WARNING: algumas revisoes ainda estao indisponiveis. Os servicos permanecem ativos para permitir recuperacao dos arquivos preservados em backups.' >&2
 fi
 publication_assert_worker_profile
 printf '%s\n' 'Containers iniciados e credenciais administrativas verificadas. Conferindo o executor de publicacao.'

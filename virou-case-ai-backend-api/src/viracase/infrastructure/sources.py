@@ -65,6 +65,15 @@ class SourceStore:
 
     def remove_project(self, account, project):
         path = self.path(account, project, project).parent
+        marker = self.root / ".deleted-projects" / account / project
+        if marker.is_symlink() or marker.parent.is_symlink():
+            raise RuleError("INVALID_PATH", "Storage inválido.", 400)
+        marker.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+        try:
+            with open(marker, "x"):
+                pass
+        except FileExistsError:
+            pass
         if path.exists():
             shutil.rmtree(path)
         return {"source_absent": not path.exists()}
